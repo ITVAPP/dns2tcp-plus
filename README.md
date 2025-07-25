@@ -1,4 +1,4 @@
-# dns2tcp
+# dns2tcp-plus
 
 一个 DNS 实用工具，用于将 DNS 查询从 UDP 转为 TCP。支持多服务器竞速查询，显著提升DNS解析的速度和可靠性。
 
