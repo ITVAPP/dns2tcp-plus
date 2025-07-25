@@ -16,7 +16,7 @@
 #include <netinet/tcp.h>
 #include "libev/ev.h"
 
-#define DNS2TCP_VER "dns2tcp v1.2.0"
+#define DNS2TCP-PLUS_VER "dns2tcp-plus v1.2.0"
 
 #ifndef IPV6_V6ONLY
   #define IPV6_V6ONLY 26
@@ -51,7 +51,7 @@
 
 /* 定义错误日志宏，仅输出错误信息 */
 #define log_error(fmt, args...) \
-    fprintf(stderr, "dns2tcp: " fmt "\n", ##args)
+    fprintf(stderr, "dns2tcp-plus: " fmt "\n", ##args)
 
 /* 定义空日志宏，禁用非关键日志 */
 #define log_verbose(fmt, args...) do {} while(0)
@@ -271,7 +271,7 @@ static void tcp_recvmsg_cb(evloop_t *evloop, evio_t *watcher, int events); /* �
 
 // 打印帮助信息
 static void print_help(void) {
-    printf("usage: dns2tcp <-L listen> [options...]\n"
+    printf("usage: dns2tcp-plus <-L listen> [options...]\n"
            " -L <ip[#port]>          udp listen address, port default to 53\n"
            " -R <ip[#port]>          tcp remote address, port default to 53 (can specify multiple)\n"
            " -l <ip[#port]>          tcp local address, port default to 0\n"
@@ -280,8 +280,8 @@ static void print_help(void) {
            " -r                      set SO_REUSEPORT option for udp socket\n"
            " -b                      disable builtin servers\n"
            " -v                      print verbose log, used for debugging\n"
-           " -V                      print version number of dns2tcp and exit\n"
-           " -h                      print help information of dns2tcp and exit\n"
+           " -V                      print version number of dns2tcp-plus and exit\n"
+           " -h                      print help information of dns2tcp-plus and exit\n"
     );
 }
 
@@ -442,7 +442,7 @@ static void parse_opt(int argc, char *argv[]) {
                 add_flag(FLAG_VERBOSE); /* 设置详细日志标志 */
                 break;
             case 'V':
-                printf(DNS2TCP_VER"\n"); /* 打印版本号 */
+                printf(DNS2TCP-PLUS_VER"\n"); /* 打印版本号 */
                 exit(0); /* 退出程序 */
             case 'h':
                 print_help(); /* 打印帮助信息 */
