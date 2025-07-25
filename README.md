@@ -81,11 +81,11 @@ dns2tcp-plus 会为每个DNS查询同时向所有配置的服务器发起TCP连�
 借助 iptables，将本机发往 8.8.8.8:53 的 UDP 查询请求，强行重定向至本机 dns2tcp-plus 监听端口，这样就可以不用修改原有 dns 组件的配置，无感转换为 TCP 查询。还是上面那个例子，在启动 dns2tcp-plus 之后，再执行如下 iptables 命令：
 
 ```bash
-# 将目标地址为 8.8.8.8:53/udp 的包重定向至 dns2tcp 监听端口，实现透明 udp2tcp 转换
+# 将目标地址为 8.8.8.8:53/udp 的包重定向至 dns2tcp-plus 监听端口，实现透明 udp2tcp 转换
 iptables -t nat -A OUTPUT -p udp -d 8.8.8.8 --dport 53 -j REDIRECT --to-ports 5353
 ```
 
-你可以在本机使用 `dig @8.8.8.8 baidu.com` 测试，观察 dns2tcp 日志（带上 -v），就会发现走 TCP 出去了。
+你可以在本机使用 `dig @8.8.8.8 baidu.com` 测试，观察 dns2tcp-plus 日志（带上 -v），就会发现走 TCP 出去了。
 
 ## 全部参数
 
