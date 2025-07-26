@@ -11,66 +11,87 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target:
-          - arch: aarch64-linux-musl
-            cpu: generic+v8a
-          - arch: aarch64-linux-musl
-            cpu: generic+v9a
-          - arch: arm-linux-musleabi
-            cpu: generic+v5t+soft_float
-          - arch: arm-linux-musleabi
-            cpu: generic+v5te+soft_float
-          - arch: arm-linux-musleabi
-            cpu: generic+v6+soft_float
-          - arch: arm-linux-musleabi
-            cpu: generic+v6t2+soft_float
-          - arch: arm-linux-musleabi
-            cpu: generic+v7a
-          - arch: arm-linux-musleabihf
-            cpu: generic+v7a
-          - arch: i386-linux-musl
-            cpu: i686
-          - arch: i386-linux-musl
-            cpu: pentium4
-          - arch: x86_64-linux-musl
-            cpu: generic
+        include:
+          - arch: aarch64
+            gcc: aarch64-linux-gnu
+            target_name: aarch64-linux-musl@generic+v8a
+          - arch: arm
+            gcc: arm-linux-gnueabi
+            target_name: arm-linux-musleabi@generic+v7a
+          - arch: arm
+            gcc: arm-linux-gnueabihf
+            target_name: arm-linux-musleabihf@generic+v7a
+          - arch: i386
+            gcc: i686-linux-gnu
+            target_name: i386-linux-musl@i686
+          - arch: x86_64
+            gcc: x86_64-linux-gnu
+            target_name: x86_64-linux-musl@generic
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Install dependencies
+    - name: Install cross-compilation tools
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential curl
+        sudo apt-get install -y build-essential
+        case "${{ matrix.arch }}" in
+          aarch64)
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+            ;;
+          arm)
+            sudo apt-get install -y gcc-arm-linux-gnueabi gcc-arm-linux-gnueabihf
+            ;;
+          i386)
+            sudo apt-get install -y gcc-multilib
+            ;;
+          x86_64)
+            # Native compilation, no additional tools needed
+            ;;
+        esac
 
-    - name: Install zig (cross-compiler)
+    - name: Build dns2tcp-plus
       run: |
-        curl -L https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz | tar -xJ
-        sudo mv zig-linux-x86_64-0.11.0 /opt/zig
-        echo "/opt/zig" >> $GITHUB_PATH
-
-    - name: Build dns2tcp
-      run: |
-        export CC="zig cc -target ${{ matrix.target.arch }} -mcpu=${{ matrix.target.cpu }}"
-        export CXX="zig c++ -target ${{ matrix.target.arch }} -mcpu=${{ matrix.target.cpu }}"
+        # Set up cross-compilation environment
+        case "${{ matrix.arch }}" in
+          aarch64)
+            export CC="${{ matrix.gcc }}-gcc"
+            export STRIP="${{ matrix.gcc }}-strip"
+            ;;
+          arm)
+            export CC="${{ matrix.gcc }}-gcc"
+            export STRIP="${{ matrix.gcc }}-strip"
+            ;;
+          i386)
+            export CC="gcc -m32"
+            export STRIP="strip"
+            ;;
+          x86_64)
+            export CC="gcc"
+            export STRIP="strip"
+            ;;
+        esac
         
-        # 编译 dns2tcp
+        # Clean and build
         make clean || true
-        make CC="$CC" CXX="$CXX" CFLAGS="-Os -static" LDFLAGS="-static"
+        make CC="$CC" CFLAGS="-Os -static" LDFLAGS="-static"
         
-        # 检查生成的二进制文件
+        # Strip binary to reduce size
+        $STRIP dns2tcp
+        
+        # Check the generated binary
         file dns2tcp
         ls -la dns2tcp
         
-        # 重命名二进制文件
-        mv dns2tcp dns2tcp-plus@${{ matrix.target.arch }}@${{ matrix.target.cpu }}
+        # Rename binary file
+        mv dns2tcp dns2tcp-plus@${{ matrix.target_name }}
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: dns2tcp-plus@${{ matrix.target.arch }}@${{ matrix.target.cpu }}
-        path: dns2tcp-plus@${{ matrix.target.arch }}@${{ matrix.target.cpu }}
+        name: dns2tcp-plus@${{ matrix.target_name }}
+        path: dns2tcp-plus@${{ matrix.target_name }}
 
   release:
     needs: build
@@ -90,4 +111,4 @@ jobs:
         draft: false
         prerelease: false
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }
