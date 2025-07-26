@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '输入版本号，例如 v1.2.0'
+        description: '输入版本号, 例如：v1.2.0'
         required: false
         default: 'manual-build'
 
@@ -21,21 +21,59 @@ jobs:
     strategy:
       matrix:
         include:
+          # ARM64 变体
           - arch: aarch64
             gcc: aarch64-linux-gnu
             target_name: aarch64-linux-musl@generic+v8a
+            extra_flags: "-march=armv8-a"
+          - arch: aarch64
+            gcc: aarch64-linux-gnu
+            target_name: aarch64-linux-musl@generic+v9a
+            extra_flags: "-march=armv8.4-a"
+          
+          # ARM32 变体 - musleabi
+          - arch: arm
+            gcc: arm-linux-gnueabi
+            target_name: arm-linux-musleabi@generic+v5t+soft_float
+            extra_flags: "-march=armv5t -mfloat-abi=soft"
+          - arch: arm
+            gcc: arm-linux-gnueabi
+            target_name: arm-linux-musleabi@generic+v5te+soft_float
+            extra_flags: "-march=armv5te -mfloat-abi=soft"
+          - arch: arm
+            gcc: arm-linux-gnueabi
+            target_name: arm-linux-musleabi@generic+v6+soft_float
+            extra_flags: "-march=armv6 -mfloat-abi=soft"
+          - arch: arm
+            gcc: arm-linux-gnueabi
+            target_name: arm-linux-musleabi@generic+v6t2+soft_float
+            extra_flags: "-march=armv6t2 -mfloat-abi=soft"
           - arch: arm
             gcc: arm-linux-gnueabi
             target_name: arm-linux-musleabi@generic+v7a
+            extra_flags: "-march=armv7-a -mfloat-abi=soft"
+          
+          # ARM32 变体 - musleabihf
           - arch: arm
             gcc: arm-linux-gnueabihf
             target_name: arm-linux-musleabihf@generic+v7a
+            extra_flags: "-march=armv7-a -mfloat-abi=hard"
+          
+          # x86 32位变体
           - arch: i386
             gcc: i686-linux-gnu
             target_name: i386-linux-musl@i686
+            extra_flags: "-m32 -march=i686"
+          - arch: i386
+            gcc: i686-linux-gnu
+            target_name: i386-linux-musl@pentium4
+            extra_flags: "-m32 -march=pentium4"
+          
+          # x86 64位
           - arch: x86_64
             gcc: x86_64-linux-gnu
             target_name: x86_64-linux-musl@generic
+            extra_flags: "-m64"
 
     steps:
     - name: Checkout code
@@ -67,24 +105,28 @@ jobs:
           aarch64)
             export CC="${{ matrix.gcc }}-gcc"
             export STRIP="${{ matrix.gcc }}-strip"
+            export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
             ;;
           arm)
             export CC="${{ matrix.gcc }}-gcc"
             export STRIP="${{ matrix.gcc }}-strip"
+            export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
             ;;
           i386)
-            export CC="gcc -m32"
+            export CC="gcc"
             export STRIP="strip"
+            export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
             ;;
           x86_64)
             export CC="gcc"
             export STRIP="strip"
+            export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
             ;;
         esac
         
         # Clean and build
         make clean || true
-        make CC="$CC" CFLAGS="-Os -static" LDFLAGS="-static"
+        make CC="$CC" CFLAGS="$CFLAGS" LDFLAGS="-static"
         
         # Strip binary to reduce size
         $STRIP dns2tcp
