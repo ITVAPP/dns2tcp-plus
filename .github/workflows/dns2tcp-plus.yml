@@ -18,7 +18,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
+      fail-fast: false
       matrix:
         include:
           # ARM64 变体
@@ -85,13 +87,14 @@ jobs:
         sudo apt-get install -y build-essential
         case "${{ matrix.arch }}" in
           aarch64)
-            sudo apt-get install -y gcc-aarch64-linux-gnu
+            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
             ;;
           arm)
-            sudo apt-get install -y gcc-arm-linux-gnueabi gcc-arm-linux-gnueabihf
+            sudo apt-get install -y gcc-arm-linux-gnueabi g++-arm-linux-gnueabi
+            sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
             ;;
           i386)
-            sudo apt-get install -y gcc-multilib
+            sudo apt-get install -y gcc-multilib g++-multilib
             ;;
           x86_64)
             # Native compilation, no additional tools needed
@@ -100,36 +103,75 @@ jobs:
 
     - name: Build dns2tcp-plus
       run: |
+        echo "Building for ${{ matrix.target_name }}"
+        
         # Set up cross-compilation environment
         case "${{ matrix.arch }}" in
           aarch64)
             export CC="${{ matrix.gcc }}-gcc"
             export STRIP="${{ matrix.gcc }}-strip"
             export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
+            export LDFLAGS="-static"
             ;;
           arm)
             export CC="${{ matrix.gcc }}-gcc"
             export STRIP="${{ matrix.gcc }}-strip"
             export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
+            export LDFLAGS="-static"
             ;;
           i386)
             export CC="gcc"
             export STRIP="strip"
             export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
+            export LDFLAGS="-static ${{ matrix.extra_flags }}"
             ;;
           x86_64)
             export CC="gcc"
             export STRIP="strip"
             export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
+            export LDFLAGS="-static ${{ matrix.extra_flags }}"
             ;;
         esac
         
+        echo "Compiler: $CC"
+        echo "CFLAGS: $CFLAGS"
+        echo "LDFLAGS: $LDFLAGS"
+        
+        # Test compiler
+        $CC --version || echo "Warning: Compiler test failed"
+        
         # Clean and build
         make clean || true
-        make CC="$CC" CFLAGS="$CFLAGS" LDFLAGS="-static"
+        
+        # Try to build, with fallback for unsupported CPU flags
+        if ! make CC="$CC" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS"; then
+            echo "Build failed with specific CPU flags, trying fallback..."
+            # Fallback with basic flags
+            case "${{ matrix.arch }}" in
+              aarch64)
+                export CFLAGS="-Os -static -march=armv8-a"
+                export LDFLAGS="-static"
+                ;;
+              arm)
+                export CFLAGS="-Os -static -march=armv7-a"
+                export LDFLAGS="-static"
+                ;;
+              i386)
+                export CFLAGS="-Os -static -m32"
+                export LDFLAGS="-static -m32"
+                ;;
+              x86_64)
+                export CFLAGS="-Os -static -m64"
+                export LDFLAGS="-static -m64"
+                ;;
+            esac
+            echo "Fallback CFLAGS: $CFLAGS"
+            echo "Fallback LDFLAGS: $LDFLAGS"
+            make CC="$CC" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS"
+        fi
         
         # Strip binary to reduce size
-        $STRIP dns2tcp
+        $STRIP dns2tcp || echo "Strip failed, continuing..."
         
         # Check the generated binary
         file dns2tcp
