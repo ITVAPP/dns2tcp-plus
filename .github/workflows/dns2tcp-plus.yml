@@ -11,9 +11,9 @@ on:
         required: false
         default: 'manual-build'
       release_notes:
-        description: '更新说明 (可选)'
+        description: '输入更新说明 (可选)'
         required: false
-        type: string
+        type: text
 
 permissions:
   contents: write
@@ -201,12 +201,34 @@ jobs:
       with:
         merge-multiple: true
 
+    - name: Set release info
+      id: release_info
+      run: |
+        # 设置版本号
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+          RELEASE_NOTES="${{ github.event.inputs.release_notes }}"
+        else
+          VERSION="${{ github.ref_name }}"
+          RELEASE_NOTES=""
+        fi
+        
+        # 如果版本号为空或是默认值，使用 ref_name
+        if [ -z "$VERSION" ] || [ "$VERSION" = "manual-build" ]; then
+          VERSION="${{ github.ref_name }}"
+        fi
+        
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+        echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ github.event.inputs.version || github.ref_name }}
-        name: dns2tcp-plus ${{ github.event.inputs.version || github.ref_name }}
-        body: ${{ github.event.inputs.release_notes }}
+        tag_name: ${{ steps.release_info.outputs.version }}
+        name: dns2tcp-plus ${{ steps.release_info.outputs.version }}
+        body: ${{ steps.release_info.outputs.release_notes }}
         files: dns2tcp-plus@*
         draft: false
         prerelease: false
