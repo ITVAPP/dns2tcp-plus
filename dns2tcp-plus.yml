@@ -1,0 +1,93 @@
+name: Cross Compile dns2tcp-plus
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - arch: aarch64-linux-musl
+            cpu: generic+v8a
+          - arch: aarch64-linux-musl
+            cpu: generic+v9a
+          - arch: arm-linux-musleabi
+            cpu: generic+v5t+soft_float
+          - arch: arm-linux-musleabi
+            cpu: generic+v5te+soft_float
+          - arch: arm-linux-musleabi
+            cpu: generic+v6+soft_float
+          - arch: arm-linux-musleabi
+            cpu: generic+v6t2+soft_float
+          - arch: arm-linux-musleabi
+            cpu: generic+v7a
+          - arch: arm-linux-musleabihf
+            cpu: generic+v7a
+          - arch: i386-linux-musl
+            cpu: i686
+          - arch: i386-linux-musl
+            cpu: pentium4
+          - arch: x86_64-linux-musl
+            cpu: generic
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential curl
+
+    - name: Install zig (cross-compiler)
+      run: |
+        curl -L https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz | tar -xJ
+        sudo mv zig-linux-x86_64-0.11.0 /opt/zig
+        echo "/opt/zig" >> $GITHUB_PATH
+
+    - name: Build dns2tcp
+      run: |
+        export CC="zig cc -target ${{ matrix.target.arch }} -mcpu=${{ matrix.target.cpu }}"
+        export CXX="zig c++ -target ${{ matrix.target.arch }} -mcpu=${{ matrix.target.cpu }}"
+        
+        # 编译 dns2tcp
+        make clean || true
+        make CC="$CC" CXX="$CXX" CFLAGS="-Os -static" LDFLAGS="-static"
+        
+        # 检查生成的二进制文件
+        file dns2tcp
+        ls -la dns2tcp
+        
+        # 重命名二进制文件
+        mv dns2tcp dns2tcp-plus@${{ matrix.target.arch }}@${{ matrix.target.cpu }}
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: dns2tcp-plus@${{ matrix.target.arch }}@${{ matrix.target.cpu }}
+        path: dns2tcp-plus@${{ matrix.target.arch }}@${{ matrix.target.cpu }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        merge-multiple: true
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dns2tcp-plus@*
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
