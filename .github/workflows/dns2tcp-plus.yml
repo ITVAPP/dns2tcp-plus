@@ -201,7 +201,8 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.event.inputs.version || github.ref_name }}
-        name: Release ${{ github.event.inputs.version || github.ref_name }}
+        name: dns2tcp-plus ${{ github.event.inputs.version || github.ref_name }}
+        body: ${{ github.event.inputs.release_notes }}
         files: dns2tcp-plus@*
         draft: false
         prerelease: false
