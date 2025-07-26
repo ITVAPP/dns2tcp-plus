@@ -16,7 +16,7 @@
 #include <netinet/tcp.h>
 #include "libev/ev.h"
 
-#define DNS2TCP-PLUS_VER "dns2tcp-plus v1.2.0"
+#define DNS2TCP_PLUS_VER "dns2tcp-plus v1.2.0"
 
 #ifndef IPV6_V6ONLY
   #define IPV6_V6ONLY 26
@@ -324,6 +324,7 @@ static void add_server(const char *ipstr, uint16_t port, int family) {
 
 // 解析地址字符串
 static void parse_addr(const char *addr, enum addr_type addr_type) {
+    const char *type; /* 定义地址类型字符串 */
     const char *end = addr + strlen(addr); /* 获取地址字符串末尾 */
     const char *sep = strchr(addr, '#') ?: end; /* 查找端口分隔符 */
 
@@ -364,7 +365,6 @@ static void parse_addr(const char *addr, enum addr_type addr_type) {
     return;
 
 err:
-    const char *type; /* 定义地址类型字符串 */
     switch (addr_type) {
         case ADDR_UDP_LISTEN:
             type = "udp_listen"; /* 设置UDP监听类型 */
@@ -442,7 +442,7 @@ static void parse_opt(int argc, char *argv[]) {
                 add_flag(FLAG_VERBOSE); /* 设置详细日志标志 */
                 break;
             case 'V':
-                printf(DNS2TCP-PLUS_VER"\n"); /* 打印版本号 */
+                printf(DNS2TCP_PLUS_VER"\n"); /* 打印版本号 */
                 exit(0); /* 退出程序 */
             case 'h':
                 print_help(); /* 打印帮助信息 */
