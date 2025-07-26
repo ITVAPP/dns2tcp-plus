@@ -10,6 +10,10 @@ on:
         description: '输入版本号, 例如：v1.2.0'
         required: false
         default: 'manual-build'
+      release_notes:
+        description: '更新说明 (可选)'
+        required: false
+        type: string
 
 permissions:
   contents: write
