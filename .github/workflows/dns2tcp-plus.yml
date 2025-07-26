@@ -10,10 +10,12 @@ on:
         description: '输入版本号, 例如：v1.2.0'
         required: false
         default: 'manual-build'
+        type: string
       release_notes:
-        description: '输入更新说明 (可选)'
+        description: '更新说明 (支持多行，使用 | 分隔不同行)'
         required: false
-        type: text
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -207,16 +209,19 @@ jobs:
         # 设置版本号
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           VERSION="${{ github.event.inputs.version }}"
-          RELEASE_NOTES="${{ github.event.inputs.release_notes }}"
+          RELEASE_NOTES_RAW="${{ github.event.inputs.release_notes }}"
         else
           VERSION="${{ github.ref_name }}"
-          RELEASE_NOTES=""
+          RELEASE_NOTES_RAW=""
         fi
         
         # 如果版本号为空或是默认值，使用 ref_name
         if [ -z "$VERSION" ] || [ "$VERSION" = "manual-build" ]; then
           VERSION="${{ github.ref_name }}"
         fi
+        
+        # 将 | 替换为真正的换行符
+        RELEASE_NOTES=$(echo "$RELEASE_NOTES_RAW" | sed 's/ | /\n/g' | sed 's/|/\n/g')
         
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "release_notes<<EOF" >> $GITHUB_OUTPUT
