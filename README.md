@@ -235,7 +235,7 @@ Based on v1.3.0 testing:
 
 ## 🔄 Changelog
 
-### v1.3.0 (2024-12)
+### v1.3.0
 - ✨ Added DNS response validation, auto-filter poisoned responses
 - ✨ Added smart domain routing with suffix matching rules
 - 🔧 Optimized DNS packet parsing, enhanced security
