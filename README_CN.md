@@ -261,12 +261,7 @@ sudo systemctl enable --now dns2tcp-plus
 
 **如果这个项目对你有帮助，请给个 ⭐ Star 支持一下！**
 
-[⬆ 回到顶部](#dns2tcp-plus)
-
-</div>
-
----
-
-<div align="center">
 Made with ❤️ by ITVAPP
+
+[⬆ 回到顶部](#dns2tcp-plus)
 </div>
