@@ -40,7 +40,7 @@ Automatically selects the most appropriate DNS servers based on domain suffix:
 
 ```bash
 # Use domestic DNS for Chinese domains to avoid overseas CDN
-dns2tcp-plus -L "127.0.0.1#5353" -D "cn:223.5.5.5,114.114.114.114"
+dns2tcp-plus -L "127.0.0.1#5353" -D "cn:223.5.5.5,119.29.29.29"
 
 # Specify dedicated DNS for specific sites
 dns2tcp-plus -L "127.0.0.1#5353" -D "google.com:8.8.8.8" -D "github.com:1.1.1.1"
@@ -87,7 +87,7 @@ dig @127.0.0.1 -p 5353 google.com
 ```bash
 # Smart routing for domestic and international domains
 dns2tcp-plus -L "127.0.0.1#5353" \
-  -D "cn:223.5.5.5,114.114.114.114" \
+  -D "cn:223.5.5.5,119.29.29.29" \
   -D "com.cn:223.5.5.5,119.29.29.29" \
   -D "baidu.com:223.5.5.5" \
   -D "taobao.com:223.5.5.5"
@@ -117,7 +117,7 @@ The following well-known public DNS servers are included by default:
 |----------|---------|-------------|
 | Google | 8.8.8.8 | Global coverage, stable and fast |
 | Cloudflare | 1.1.1.1 | Privacy-focused, excellent performance |
-| 114DNS | 114.114.114.114 | Popular in China |
+| Quad9 | 9.9.9.9 | Security-focused, filters malicious websites |
 | AliDNS | 223.5.5.5 | Alibaba Cloud public DNS |
 | DNSPod | 119.29.29.29 | Tencent public DNS |
 
@@ -146,7 +146,7 @@ The following well-known public DNS servers are included by default:
 ```
 
 Examples:
-- `-D "cn:223.5.5.5,114.114.114.114"` - Use specified DNS for .cn domains
+- `-D "cn:223.5.5.5,119.29.29.29"` - Use specified DNS for .cn domains
 - `-D "google.com:8.8.8.8"` - Use 8.8.8.8 for google.com and subdomains
 - `-D "local:192.168.1.1"` - Use internal DNS for .local domains
 
@@ -156,12 +156,12 @@ Examples:
 
 ```bash
 dns2tcp-plus -L "127.0.0.1#5353" \
-  -D "cn:223.5.5.5,114.114.114.114" \
-  -D "com.cn:223.5.5.5,114.114.114.114" \
-  -D "org.cn:223.5.5.5,114.114.114.114" \
-  -D "net.cn:223.5.5.5,114.114.114.114" \
-  -D "edu.cn:223.5.5.5,114.114.114.114" \
-  -D "gov.cn:223.5.5.5,114.114.114.114"
+  -D "cn:223.5.5.5,119.29.29.29" \
+  -D "com.cn:223.5.5.5,119.29.29.29" \
+  -D "org.cn:223.5.5.5,119.29.29.29" \
+  -D "net.cn:223.5.5.5,119.29.29.29" \
+  -D "edu.cn:223.5.5.5,119.29.29.29" \
+  -D "gov.cn:223.5.5.5,119.29.29.29"
 ```
 
 ### 2. Integration with dnsmasq
@@ -183,7 +183,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/dns2tcp-plus -L "0.0.0.0#53" -D "cn:223.5.5.5,114.114.114.114"
+ExecStart=/usr/local/bin/dns2tcp-plus -L "0.0.0.0#53" -D "cn:223.5.5.5,119.29.29.29"
 Restart=always
 User=nobody
 
@@ -210,9 +210,9 @@ Client → dns2tcp-plus → Query multiple servers → Use fastest valid respons
 ```
 Query: www.baidu.cn
   ↓
-Match rule: cn → 223.5.5.5, 114.114.114.114
+Match rule: cn → 223.5.5.5, 119.29.29.29
   ↓
-Query only: 223.5.5.5 and 114.114.114.114 (skip other servers)
+Query only: 223.5.5.5 and 119.29.29.29 (skip other servers)
 ```
 
 ### Response Validation Mechanism
