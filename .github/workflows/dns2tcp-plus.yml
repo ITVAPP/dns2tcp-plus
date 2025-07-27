@@ -177,14 +177,14 @@ jobs:
         fi
         
         # Strip binary to reduce size
-        $STRIP dns2tcp || echo "Strip failed, continuing..."
+        $STRIP dns2tcp-plus || echo "Strip failed, continuing..."
         
         # Check the generated binary
-        file dns2tcp
-        ls -la dns2tcp
+        file dns2tcp-plus
+        ls -la dns2tcp-plus
         
         # Rename binary file
-        mv dns2tcp dns2tcp-plus@${{ matrix.target_name }}
+        mv dns2tcp-plus dns2tcp-plus@${{ matrix.target_name }}
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
