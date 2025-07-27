@@ -17,15 +17,15 @@
 
 ## 如何编译
 
-> 为了方便使用，[releases](https://github.com/zfl9/dns2tcp/releases) 页面发布了 linux 下常见架构的 musl 静态链接二进制。
+> 为了方便使用，[releases](https://github.com/ITVAPP/dns2tcp-plus/releases) 页面发布了 linux 下常见架构的 musl 静态链接二进制。
 
 ```bash
-git clone https://github.com/zfl9/dns2tcp
-cd dns2tcp
+git clone https://github.com/ITVAPP/dns2tcp-plus
+cd dns2tcp-plus
 make && sudo make install
 ```
 
-dns2tcp-plus 默认安装到 `/usr/local/bin/dns2tcp`，可安装到其它目录，如 `make install DESTDIR=/opt/local/bin`。
+dns2tcp-plus 默认安装到 `/usr/local/bin/dns2tcp-plus`，可安装到其它目录，如 `make install DESTDIR=/opt/local/bin`。
 
 交叉编译时只需指定 CC 变量，如 `make CC=aarch64-linux-gnu-gcc`（若报错，请先执行 `make clean`，然后再试）。
 
@@ -33,22 +33,22 @@ dns2tcp-plus 默认安装到 `/usr/local/bin/dns2tcp`，可安装到其它目录
 
 ```bash
 # 使用内置的公共DNS服务器（默认行为）
-dns2tcp -L "127.0.0.1#5353"
+dns2tcp-plus -L "127.0.0.1#5353"
 
 # 指定额外的上游服务器（会与内置服务器一起使用）
-dns2tcp -L "127.0.0.1#5353" -R "8.8.8.8#53"
+dns2tcp-plus -L "127.0.0.1#5353" -R "8.8.8.8#53"
 
 # 指定多个额外上游服务器（全部服务器一起竞速）
-dns2tcp -L "127.0.0.1#5353" -R "192.168.1.1" -R "192.168.1.2"
+dns2tcp-plus -L "127.0.0.1#5353" -R "192.168.1.1" -R "192.168.1.2"
 
 # 仅使用指定的服务器，禁用内置服务器
-dns2tcp -L "127.0.0.1#5353" -R "192.168.1.1" -b
+dns2tcp-plus -L "127.0.0.1#5353" -R "192.168.1.1" -b
 
 # 启用详细日志查看竞速效果
-dns2tcp -L "127.0.0.1#5353" -v
+dns2tcp-plus -L "127.0.0.1#5353" -v
 
 # 如果想在后台运行，可以这样做：
-(dns2tcp -L "127.0.0.1#5353" </dev/null &>>/var/log/dns2tcp.log &)
+(dns2tcp-plus -L "127.0.0.1#5353" </dev/null &>>/var/log/dns2tcp-plus.log &)
 ```
 
 - `-L` 选项指定本地监听地址，该监听地址接受 UDP 协议的 DNS 查询。
