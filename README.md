@@ -1,6 +1,6 @@
 # dns2tcp-plus
 
-一个 DNS 实用工具，用于将 DNS 查询从 UDP 转为 TCP。支持多服务器竞速查询，显著提升DNS解析的速度和可靠性。
+一个 DNS 工具，用于将 DNS 查询从 UDP 转为 TCP。支持多服务器竞速查询，提升DNS解析的速度和可靠性。
 
 当然有很多 DNS 工具都可以实现这个功能，比如 pdnsd、dnsforwarder；但如果你只是想使用其 UDP 转 TCP 功能（比如配合 dnsmasq，将 dnsmasq 向上游发出的 DNS 查询从 UDP 转为 TCP），那么 dns2tcp-plus 可能是更好的选择。
 
@@ -23,6 +23,12 @@
 git clone https://github.com/ITVAPP/dns2tcp-plus
 cd dns2tcp-plus
 make && sudo make install
+```
+
+> Windows下查看哈希值命令。
+
+```bash
+certutil -hashfile "dns2tcp-plus-1.2.0.tar.gz" SHA256
 ```
 
 dns2tcp-plus 默认安装到 `/usr/local/bin/dns2tcp-plus`，可安装到其它目录，如 `make install DESTDIR=/opt/local/bin`。
