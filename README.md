@@ -1,4 +1,4 @@
-# 🚀 dns2tcp-plus
+# dns2tcp-plus
 
 <div align="center">
 
@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-linux-lightgrey.svg)](https://github.com/ITVAPP/dns2tcp-plus)
 
-English | [简体中文](README.md)
+English | [简体中文](README_CN.md)
 
 A lightweight DNS tool that converts DNS queries from UDP to TCP, featuring multi-server race queries to significantly improve DNS resolution speed and reliability.
 
@@ -265,5 +265,5 @@ This project is open-sourced under the MIT License.
 
 Made with ❤️ by ITVAPP
 
-[⬆ Back to Top](#IAppPlayer)
+[⬆ Back to Top](#dns2tcp-plus)
 </div>
