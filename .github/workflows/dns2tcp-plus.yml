@@ -22,7 +22,7 @@ permissions:
   packages: write
 
 jobs:
-  build-musl:
+  build:
     runs-on: ubuntu-latest
     continue-on-error: true
     strategy:
@@ -31,187 +31,159 @@ jobs:
         include:
           # ARM64 变体
           - arch: aarch64
-            musl_arch: aarch64
+            gcc: aarch64-linux-gnu
             target_name: aarch64-linux-musl@generic+v8a
             extra_flags: "-march=armv8-a"
           - arch: aarch64
-            musl_arch: aarch64
+            gcc: aarch64-linux-gnu
             target_name: aarch64-linux-musl@generic+v9a
             extra_flags: "-march=armv8.4-a"
           
           # ARM32 变体 - musleabi
           - arch: arm
-            musl_arch: arm
+            gcc: arm-linux-gnueabi
             target_name: arm-linux-musleabi@generic+v5t+soft_float
             extra_flags: "-march=armv5t -mfloat-abi=soft"
           - arch: arm
-            musl_arch: arm
+            gcc: arm-linux-gnueabi
             target_name: arm-linux-musleabi@generic+v5te+soft_float
             extra_flags: "-march=armv5te -mfloat-abi=soft"
           - arch: arm
-            musl_arch: arm
+            gcc: arm-linux-gnueabi
             target_name: arm-linux-musleabi@generic+v6+soft_float
             extra_flags: "-march=armv6 -mfloat-abi=soft"
           - arch: arm
-            musl_arch: arm
+            gcc: arm-linux-gnueabi
             target_name: arm-linux-musleabi@generic+v6t2+soft_float
             extra_flags: "-march=armv6t2 -mfloat-abi=soft"
           - arch: arm
-            musl_arch: arm
+            gcc: arm-linux-gnueabi
             target_name: arm-linux-musleabi@generic+v7a
             extra_flags: "-march=armv7-a -mfloat-abi=soft"
           
           # ARM32 变体 - musleabihf
           - arch: arm
-            musl_arch: armhf
+            gcc: arm-linux-gnueabihf
             target_name: arm-linux-musleabihf@generic+v7a
             extra_flags: "-march=armv7-a -mfloat-abi=hard"
           
           # x86 32位变体
           - arch: i386
-            musl_arch: i386
+            gcc: i686-linux-gnu
             target_name: i386-linux-musl@i686
-            extra_flags: "-march=i686"
+            extra_flags: "-m32 -march=i686"
           - arch: i386
-            musl_arch: i386
+            gcc: i686-linux-gnu
             target_name: i386-linux-musl@pentium4
-            extra_flags: "-march=pentium4"
+            extra_flags: "-m32 -march=pentium4"
           
           # x86 64位
           - arch: x86_64
-            musl_arch: x86_64
+            gcc: x86_64-linux-gnu
             target_name: x86_64-linux-musl@generic
-            extra_flags: ""
+            extra_flags: "-m64"
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Setup build environment
+    - name: Install cross-compilation tools
       run: |
-        # 为 x86_64 安装必要的开发包
-        if [ "${{ matrix.arch }}" = "x86_64" ]; then
-          sudo apt-get update
-          sudo apt-get install -y musl-tools musl-dev
-        fi
-
-    - name: Download musl cross toolchain
-      if: matrix.arch != 'x86_64'
-      run: |
-        # 下载对应的 musl 交叉编译工具链
-        case "${{ matrix.musl_arch }}" in
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+        case "${{ matrix.arch }}" in
           aarch64)
-            TOOLCHAIN_URL="https://musl.cc/aarch64-linux-musl-cross.tgz"
+            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
             ;;
           arm)
-            TOOLCHAIN_URL="https://musl.cc/arm-linux-musleabi-cross.tgz"
-            ;;
-          armhf)
-            TOOLCHAIN_URL="https://musl.cc/arm-linux-musleabihf-cross.tgz"
+            sudo apt-get install -y gcc-arm-linux-gnueabi g++-arm-linux-gnueabi
+            sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
             ;;
           i386)
-            TOOLCHAIN_URL="https://musl.cc/i386-linux-musl-cross.tgz"
+            sudo apt-get install -y gcc-multilib g++-multilib
+            ;;
+          x86_64)
+            # Native compilation, no additional tools needed
             ;;
         esac
-        
-        echo "Downloading toolchain: $TOOLCHAIN_URL"
-        wget -q "$TOOLCHAIN_URL" -O toolchain.tgz
-        tar -xzf toolchain.tgz
-        
-        # 获取工具链目录名
-        TOOLCHAIN_DIR=$(tar -tzf toolchain.tgz | head -1 | cut -d/ -f1)
-        echo "TOOLCHAIN_PATH=$PWD/$TOOLCHAIN_DIR" >> $GITHUB_ENV
-
-    - name: Build OpenSSL for musl
-      run: |
-        # 下载 OpenSSL
-        wget -q https://www.openssl.org/source/openssl-1.1.1w.tar.gz
-        tar -xzf openssl-1.1.1w.tar.gz
-        cd openssl-1.1.1w
-        
-        # 设置编译环境
-        if [ "${{ matrix.arch }}" = "x86_64" ]; then
-          export CC="musl-gcc"
-          export PREFIX="/tmp/openssl-musl"
-          OPENSSL_TARGET="linux-x86_64"
-        else
-          export PATH="$TOOLCHAIN_PATH/bin:$PATH"
-          CROSS_COMPILE=$(ls $TOOLCHAIN_PATH/bin/*-gcc | head -1 | xargs basename | sed 's/-gcc$//')
-          export CC="${CROSS_COMPILE}-gcc"
-          export PREFIX="$TOOLCHAIN_PATH/${CROSS_COMPILE}"
-          
-          case "${{ matrix.arch }}" in
-            aarch64) OPENSSL_TARGET="linux-aarch64" ;;
-            arm) OPENSSL_TARGET="linux-armv4" ;;
-            i386) OPENSSL_TARGET="linux-x86" ;;
-          esac
-        fi
-        
-        # 配置 OpenSSL（禁用汇编以提高兼容性）
-        ./Configure $OPENSSL_TARGET \
-          no-shared \
-          no-async \
-          no-asm \
-          --prefix="$PREFIX" \
-          --openssldir="$PREFIX/ssl"
-        
-        # 编译和安装
-        make -j$(nproc)
-        make install_sw
-        cd ..
 
     - name: Build dns2tcp-plus
       run: |
         echo "Building for ${{ matrix.target_name }}"
         
-        # 设置编译环境
-        if [ "${{ matrix.arch }}" = "x86_64" ]; then
-          export CC="musl-gcc"
-          export STRIP="strip"
-          export SSL_PREFIX="/tmp/openssl-musl"
-        else
-          export PATH="$TOOLCHAIN_PATH/bin:$PATH"
-          CROSS_COMPILE=$(ls $TOOLCHAIN_PATH/bin/*-gcc | head -1 | xargs basename | sed 's/-gcc$//')
-          export CC="${CROSS_COMPILE}-gcc"
-          export STRIP="${CROSS_COMPILE}-strip"
-          export SSL_PREFIX="$TOOLCHAIN_PATH/${CROSS_COMPILE}"
-        fi
+        # Set up cross-compilation environment
+        case "${{ matrix.arch }}" in
+          aarch64)
+            export CC="${{ matrix.gcc }}-gcc"
+            export STRIP="${{ matrix.gcc }}-strip"
+            export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
+            export LDFLAGS="-static"
+            ;;
+          arm)
+            export CC="${{ matrix.gcc }}-gcc"
+            export STRIP="${{ matrix.gcc }}-strip"
+            export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
+            export LDFLAGS="-static"
+            ;;
+          i386)
+            export CC="gcc"
+            export STRIP="strip"
+            export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
+            export LDFLAGS="-static ${{ matrix.extra_flags }}"
+            ;;
+          x86_64)
+            export CC="gcc"
+            export STRIP="strip"
+            export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
+            export LDFLAGS="-static ${{ matrix.extra_flags }}"
+            ;;
+        esac
         
-        # 设置编译标志
-        export CFLAGS="-Os -static ${{ matrix.extra_flags }} -I${SSL_PREFIX}/include"
-        export LDFLAGS="-static -L${SSL_PREFIX}/lib"
-        
-        echo "CC: $CC"
+        echo "Compiler: $CC"
         echo "CFLAGS: $CFLAGS"
         echo "LDFLAGS: $LDFLAGS"
         
-        # 清理和编译
+        # Test compiler
+        $CC --version || echo "Warning: Compiler test failed"
+        
+        # Clean and build
         make clean || true
         
-        # 尝试编译，如果失败则回退到基础 CPU 标志
-        if ! make CC="$CC" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" LIBS="-lssl -lcrypto -ldl -lpthread -lm"; then
-          echo "Build failed with specific CPU flags, trying with basic flags..."
-          
-          # 使用基础标志重试
-          case "${{ matrix.arch }}" in
-            aarch64) export CFLAGS="-Os -static -I${SSL_PREFIX}/include" ;;
-            arm) export CFLAGS="-Os -static -marm -I${SSL_PREFIX}/include" ;;
-            i386) export CFLAGS="-Os -static -m32 -I${SSL_PREFIX}/include" ;;
-            x86_64) export CFLAGS="-Os -static -I${SSL_PREFIX}/include" ;;
-          esac
-          
-          make clean || true
-          make CC="$CC" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" LIBS="-lssl -lcrypto -ldl -lpthread -lm"
+        # Try to build, with fallback for unsupported CPU flags
+        if ! make CC="$CC" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS"; then
+            echo "Build failed with specific CPU flags, trying fallback..."
+            # Fallback with basic flags
+            case "${{ matrix.arch }}" in
+              aarch64)
+                export CFLAGS="-Os -static -march=armv8-a"
+                export LDFLAGS="-static"
+                ;;
+              arm)
+                export CFLAGS="-Os -static -march=armv7-a"
+                export LDFLAGS="-static"
+                ;;
+              i386)
+                export CFLAGS="-Os -static -m32"
+                export LDFLAGS="-static -m32"
+                ;;
+              x86_64)
+                export CFLAGS="-Os -static -m64"
+                export LDFLAGS="-static -m64"
+                ;;
+            esac
+            echo "Fallback CFLAGS: $CFLAGS"
+            echo "Fallback LDFLAGS: $LDFLAGS"
+            make CC="$CC" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS"
         fi
         
-        # 剥离符号
+        # Strip binary to reduce size
         $STRIP dns2tcp-plus || echo "Strip failed, continuing..."
         
-        # 检查二进制
+        # Check the generated binary
         file dns2tcp-plus
         ls -la dns2tcp-plus
         
-        # 重命名
+        # Rename binary file
         mv dns2tcp-plus dns2tcp-plus@${{ matrix.target_name }}
 
     - name: Upload artifacts
@@ -221,7 +193,7 @@ jobs:
         path: dns2tcp-plus@${{ matrix.target_name }}
 
   release:
-    needs: build-musl
+    needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     
