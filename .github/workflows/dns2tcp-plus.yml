@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '输入版本号, 例如：v2.0.0'
+        description: '输入版本号, 例如：v1.2.0'
         required: false
         default: 'manual-build'
         type: string
@@ -29,236 +29,191 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # x86_64
-          - platform: linux/amd64
-            arch: x86_64
-            target_name: x86_64-linux-musl@generic
-            
-          # x86 32-bit
-          - platform: linux/386
-            arch: i386
-            target_name: i386-linux-musl@i686
-            
-          # ARM64 v8
-          - platform: linux/arm64/v8
-            arch: aarch64
+          # ARM64 变体
+          - arch: aarch64
             target_name: aarch64-linux-musl@generic+v8a
-            
-          # ARM32 v7
-          - platform: linux/arm/v7
-            arch: armv7
-            target_name: arm-linux-musleabihf@generic+v7a
-            
-          # ARM32 v6
-          - platform: linux/arm/v6
-            arch: armv6
+            musl_arch: aarch64
+            extra_flags: "-march=armv8-a"
+          - arch: aarch64
+            target_name: aarch64-linux-musl@generic+v9a
+            musl_arch: aarch64
+            extra_flags: "-march=armv8.4-a"
+          
+          # ARM32 变体 - musleabi
+          - arch: arm
+            target_name: arm-linux-musleabi@generic+v5t+soft_float
+            musl_arch: arm
+            extra_flags: "-march=armv5t -mfloat-abi=soft"
+          - arch: arm
+            target_name: arm-linux-musleabi@generic+v5te+soft_float
+            musl_arch: arm
+            extra_flags: "-march=armv5te -mfloat-abi=soft"
+          - arch: arm
             target_name: arm-linux-musleabi@generic+v6+soft_float
+            musl_arch: arm
+            extra_flags: "-march=armv6 -mfloat-abi=soft"
+          - arch: arm
+            target_name: arm-linux-musleabi@generic+v6t2+soft_float
+            musl_arch: arm
+            extra_flags: "-march=armv6t2 -mfloat-abi=soft"
+          - arch: arm
+            target_name: arm-linux-musleabi@generic+v7a
+            musl_arch: arm
+            extra_flags: "-march=armv7-a -mfloat-abi=soft"
+          
+          # ARM32 变体 - musleabihf
+          - arch: arm
+            target_name: arm-linux-musleabihf@generic+v7a
+            musl_arch: armhf
+            extra_flags: "-march=armv7-a -mfloat-abi=hard"
+          
+          # x86 32位变体
+          - arch: i386
+            target_name: i386-linux-musl@i686
+            musl_arch: i686
+            extra_flags: "-m32 -march=i686"
+          - arch: i386
+            target_name: i386-linux-musl@pentium4
+            musl_arch: i686
+            extra_flags: "-m32 -march=pentium4"
+          
+          # x86 64位
+          - arch: x86_64
+            target_name: x86_64-linux-musl@generic
+            musl_arch: x86_64
+            extra_flags: "-m64"
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Build in Alpine container
+    - name: Download musl toolchain and static libraries
       run: |
-        # 创建构建脚本
-        cat > build.sh << 'SCRIPT'
-        #!/bin/sh
-        set -e
+        echo "Setting up musl toolchain for ${{ matrix.musl_arch }}"
         
-        # 安装构建依赖
-        apk add --no-cache build-base openssl-dev openssl-libs-static linux-headers
+        # 对于 x86_64，使用系统自带的 musl 工具
+        if [ "${{ matrix.arch }}" = "x86_64" ]; then
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev
+          
+          # 下载并编译静态 OpenSSL
+          wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
+          tar -xzf openssl-1.1.1w.tar.gz
+          cd openssl-1.1.1w
+          ./Configure linux-x86_64 no-shared no-tests --prefix=/usr/local/musl
+          make -j$(nproc)
+          sudo make install_sw
+          cd ..
+        else
+          # 对于其他架构，下载预编译的 musl 交叉工具链
+          case "${{ matrix.musl_arch }}" in
+            aarch64)
+              TOOLCHAIN_URL="https://musl.cc/aarch64-linux-musl-cross.tgz"
+              ;;
+            arm)
+              TOOLCHAIN_URL="https://musl.cc/arm-linux-musleabi-cross.tgz"
+              ;;
+            armhf)
+              TOOLCHAIN_URL="https://musl.cc/arm-linux-musleabihf-cross.tgz"
+              ;;
+            i686)
+              TOOLCHAIN_URL="https://musl.cc/i686-linux-musl-cross.tgz"
+              ;;
+          esac
+          
+          echo "Downloading toolchain from $TOOLCHAIN_URL"
+          wget -q $TOOLCHAIN_URL -O toolchain.tgz
+          tar -xzf toolchain.tgz
+          
+          # 设置工具链路径
+          TOOLCHAIN_DIR=$(tar -tzf toolchain.tgz | head -1 | cut -d/ -f1)
+          echo "TOOLCHAIN_PATH=$PWD/$TOOLCHAIN_DIR" >> $GITHUB_ENV
+        fi
+
+    - name: Build OpenSSL static library for cross-compilation
+      if: matrix.arch != 'x86_64'
+      run: |
+        export PATH="$TOOLCHAIN_PATH/bin:$PATH"
+        CROSS_PREFIX=$(ls $TOOLCHAIN_PATH/bin/*-gcc | head -1 | sed 's/-gcc$//')
+        CROSS_PREFIX=$(basename $CROSS_PREFIX)
         
-        # 显示环境信息
-        echo "Architecture: $(uname -m)"
-        echo "GCC version: $(gcc --version | head -n1)"
-        echo "OpenSSL version: $(openssl version)"
+        wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
+        tar -xzf openssl-1.1.1w.tar.gz
+        cd openssl-1.1.1w
         
-        # 清理
+        case "${{ matrix.arch }}" in
+          aarch64)
+            OPENSSL_TARGET="linux-aarch64"
+            ;;
+          arm)
+            OPENSSL_TARGET="linux-armv4"
+            ;;
+          i386)
+            OPENSSL_TARGET="linux-x86"
+            ;;
+        esac
+        
+        ./Configure $OPENSSL_TARGET no-shared no-tests \
+          --prefix=$TOOLCHAIN_PATH/$CROSS_PREFIX \
+          --cross-compile-prefix=$CROSS_PREFIX-
+        
+        make -j$(nproc)
+        make install_sw
+        cd ..
+
+    - name: Build dns2tcp-plus
+      run: |
+        echo "Building for ${{ matrix.target_name }}"
+        
+        # Set up cross-compilation environment
+        if [ "${{ matrix.arch }}" = "x86_64" ]; then
+          export CC="musl-gcc"
+          export STRIP="strip"
+          export CFLAGS="-Os -static ${{ matrix.extra_flags }} -I/usr/local/musl/include"
+          export LDFLAGS="-static -L/usr/local/musl/lib"
+        else
+          export PATH="$TOOLCHAIN_PATH/bin:$PATH"
+          CROSS_PREFIX=$(ls $TOOLCHAIN_PATH/bin/*-gcc | head -1 | sed 's/-gcc$//')
+          CROSS_PREFIX=$(basename $CROSS_PREFIX)
+          export CC="$CROSS_PREFIX-gcc"
+          export STRIP="$CROSS_PREFIX-strip"
+          export CFLAGS="-Os -static ${{ matrix.extra_flags }}"
+          export LDFLAGS="-static"
+        fi
+        
+        echo "Compiler: $CC"
+        echo "CFLAGS: $CFLAGS"
+        echo "LDFLAGS: $LDFLAGS"
+        
+        # Test compiler
+        $CC --version || echo "Warning: Compiler test failed"
+        
+        # Clean and build
         make clean || true
         
-        # 创建静态链接的 Makefile
-        cat > Makefile.static << 'EOF'
-        CC = gcc
-        CFLAGS = -std=c99 -Wall -Wextra -O3 -DNDEBUG -ffunction-sections -fdata-sections
-        LDFLAGS = -static -Wl,--gc-sections
-        LIBS = -lssl -lcrypto -lz -ldl -lpthread -lm
+        # Build with proper flags
+        make CC="$CC" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS"
         
-        SRCS = dns2tcp-plus.c libev/ev.c
-        OBJS = $(SRCS:.c=.o)
-        MAIN = dns2tcp-plus
+        # Strip binary to reduce size
+        $STRIP dns2tcp-plus || echo "Strip failed, continuing..."
         
-        all: $(MAIN)
-        
-        $(MAIN): $(OBJS)
-        	$(CC) $(LDFLAGS) -o $(MAIN) $(OBJS) $(LIBS)
-        
-        dns2tcp-plus.o: dns2tcp-plus.c
-        	$(CC) $(CFLAGS) -c dns2tcp-plus.c -o dns2tcp-plus.o
-        
-        libev/ev.o: libev/ev.c
-        	$(CC) $(CFLAGS) -DEV_STANDALONE=1 -c libev/ev.c -o libev/ev.o
-        
-        clean:
-        	$(RM) $(MAIN) $(OBJS)
-        EOF
-        
-        # 编译
-        make -f Makefile.static
-        
-        # Strip 优化大小
-        strip -s dns2tcp-plus
-        
-        # 检查文件
-        echo "=== File info ==="
+        # Check the generated binary
         file dns2tcp-plus
         ls -la dns2tcp-plus
         
-        # 检查是否静态链接
-        echo "=== Checking static linking ==="
-        if ldd dns2tcp-plus 2>&1 | grep -q "not a dynamic executable"; then
-          echo "✓ Binary is statically linked"
-        else
-          echo "✗ Warning: Binary may not be fully static"
-          ldd dns2tcp-plus || true
-        fi
-        
-        # 测试运行
-        echo "=== Testing binary ==="
-        ./dns2tcp-plus -V || echo "Version check failed (may be normal for cross-compiled binaries)"
-        SCRIPT
-        
-        chmod +x build.sh
-        
-        # 使用 Docker 在对应架构的 Alpine 容器中构建
-        docker run --rm \
-          --platform=${{ matrix.platform }} \
-          -v "$PWD:/work" \
-          -w /work \
-          alpine:3.19 \
-          sh -c './build.sh'
-        
-        # 重命名输出文件
+        # Rename binary file
         mv dns2tcp-plus dns2tcp-plus@${{ matrix.target_name }}
 
-    - name: Compress with UPX (optional)
-      continue-on-error: true
-      run: |
-        # 安装 UPX
-        wget -q https://github.com/upx/upx/releases/download/v4.2.2/upx-4.2.2-amd64_linux.tar.xz
-        tar xf upx-4.2.2-amd64_linux.tar.xz
-        
-        # 备份原始文件
-        cp dns2tcp-plus@${{ matrix.target_name }} dns2tcp-plus@${{ matrix.target_name }}.orig
-        
-        # 尝试压缩（某些架构可能不支持）
-        if ./upx-4.2.2-amd64_linux/upx --best --lzma dns2tcp-plus@${{ matrix.target_name }}; then
-          echo "UPX compression successful"
-          ls -la dns2tcp-plus@${{ matrix.target_name }}*
-        else
-          echo "UPX compression failed, using original"
-          mv dns2tcp-plus@${{ matrix.target_name }}.orig dns2tcp-plus@${{ matrix.target_name }}
-        fi
-
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: dns2tcp-plus@${{ matrix.target_name }}
-        path: dns2tcp-plus@${{ matrix.target_name }}
-
-  # 为旧版 ARM 设备构建额外版本
-  build-legacy-arm:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/arm/v5
-            target_name: arm-linux-musleabi@generic+v5t+soft_float
-          - platform: linux/arm/v5
-            target_name: arm-linux-musleabi@generic+v5te+soft_float
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
-
-    - name: Build in Alpine container
-      run: |
-        # 使用相同的构建脚本
-        cat > build.sh << 'SCRIPT'
-        #!/bin/sh
-        set -e
-        apk add --no-cache build-base openssl-dev openssl-libs-static linux-headers
-        
-        cat > Makefile.static << 'EOF'
-        CC = gcc
-        CFLAGS = -std=c99 -Wall -Wextra -O2 -DNDEBUG -march=armv5t -msoft-float
-        LDFLAGS = -static
-        LIBS = -lssl -lcrypto -lz -ldl -lpthread -lm
-        
-        SRCS = dns2tcp-plus.c libev/ev.c
-        OBJS = $(SRCS:.c=.o)
-        MAIN = dns2tcp-plus
-        
-        all: $(MAIN)
-        
-        $(MAIN): $(OBJS)
-        	$(CC) $(LDFLAGS) -o $(MAIN) $(OBJS) $(LIBS)
-        
-        .c.o:
-        	$(CC) $(CFLAGS) -c $< -o $@
-        
-        libev/ev.o: libev/ev.c
-        	$(CC) $(CFLAGS) -DEV_STANDALONE=1 -c libev/ev.c -o libev/ev.o
-        
-        clean:
-        	$(RM) $(MAIN) $(OBJS)
-        EOF
-        
-        make -f Makefile.static
-        strip -s dns2tcp-plus
-        
-        file dns2tcp-plus
-        ls -la dns2tcp-plus
-        SCRIPT
-        
-        chmod +x build.sh
-        
-        docker run --rm \
-          --platform=${{ matrix.platform }} \
-          -v "$PWD:/work" \
-          -w /work \
-          alpine:3.19 \
-          sh -c './build.sh' || echo "Build failed for ${{ matrix.platform }}"
-        
-        if [ -f dns2tcp-plus ]; then
-          mv dns2tcp-plus dns2tcp-plus@${{ matrix.target_name }}
-        else
-          echo "No binary produced for ${{ matrix.target_name }}"
-          # 创建一个占位文件
-          echo "Build failed" > dns2tcp-plus@${{ matrix.target_name }}
-        fi
-
-    - name: Upload artifacts
-      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: dns2tcp-plus@${{ matrix.target_name }}
         path: dns2tcp-plus@${{ matrix.target_name }}
 
   release:
-    needs: [build, build-legacy-arm]
+    needs: build
     runs-on: ubuntu-latest
-    if: always() && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     
     steps:
     - name: Download all artifacts
@@ -266,32 +221,10 @@ jobs:
       with:
         merge-multiple: true
 
-    - name: Check and filter artifacts
-      run: |
-        # 列出所有文件
-        ls -la dns2tcp-plus@*
-        
-        # 过滤掉失败的构建（文本文件）
-        for f in dns2tcp-plus@*; do
-          if file "$f" | grep -q "text"; then
-            echo "Removing failed build: $f"
-            rm "$f"
-          fi
-        done
-        
-        # 显示最终的文件列表
-        echo "=== Final binaries ==="
-        ls -la dns2tcp-plus@* || echo "No binaries found!"
-        
-        # 生成 SHA256 校验和
-        if ls dns2tcp-plus@* 1> /dev/null 2>&1; then
-          sha256sum dns2tcp-plus@* > sha256sums.txt
-          cat sha256sums.txt
-        fi
-
     - name: Set release info
       id: release_info
       run: |
+        # 设置版本号
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           VERSION="${{ github.event.inputs.version }}"
           RELEASE_NOTES_RAW="${{ github.event.inputs.release_notes }}"
@@ -300,42 +233,13 @@ jobs:
           RELEASE_NOTES_RAW=""
         fi
         
+        # 如果版本号为空或是默认值，使用 ref_name
         if [ -z "$VERSION" ] || [ "$VERSION" = "manual-build" ]; then
           VERSION="${{ github.ref_name }}"
         fi
         
+        # 将 | 替换为真正的换行符
         RELEASE_NOTES=$(echo "$RELEASE_NOTES_RAW" | sed 's/ | /\n/g' | sed 's/|/\n/g')
-        
-        if [ -z "$RELEASE_NOTES" ]; then
-          RELEASE_NOTES="# dns2tcp-plus $VERSION
-
-## 🆕 主要特性 / Major Features
-
-- 🔒 **DNS over TLS (DoT)** - 853端口自动加密 / Automatic encryption on port 853
-- 🔄 **系统DNS集成** - 智能故障转移 / System DNS with smart failover
-- ⚡ **内存池优化** - 高性能设计 / Memory pool optimization
-- 🛡️ **安全增强** - 恶意IP过滤 / Enhanced security features
-
-## 📦 下载说明 / Download Guide
-
-所有二进制文件都是静态链接，可在相应平台直接运行。
-All binaries are statically linked and ready to run.
-
-### Intel/AMD
-- \`x86_64-linux-musl\` - 64位系统 / 64-bit systems
-- \`i386-linux-musl\` - 32位系统 / 32-bit systems
-
-### ARM  
-- \`aarch64-linux-musl\` - 64位ARM (树莓派4/5) / 64-bit ARM (RPi 4/5)
-- \`arm-linux-musleabihf@v7a\` - 32位ARM (树莓派2/3) / 32-bit ARM (RPi 2/3)
-- \`arm-linux-musleabi@v6\` - 旧版ARM (树莓派1) / Older ARM (RPi 1)
-- \`arm-linux-musleabi@v5t\` - 更旧设备 / Legacy devices
-
-## 📝 SHA256 校验和 / Checksums
-
-请下载 \`sha256sums.txt\` 验证文件完整性。
-Download \`sha256sums.txt\` to verify file integrity."
-        fi
         
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "release_notes<<EOF" >> $GITHUB_OUTPUT
@@ -348,9 +252,7 @@ Download \`sha256sums.txt\` to verify file integrity."
         tag_name: ${{ steps.release_info.outputs.version }}
         name: dns2tcp-plus ${{ steps.release_info.outputs.version }}
         body: ${{ steps.release_info.outputs.release_notes }}
-        files: |
-          dns2tcp-plus@*
-          sha256sums.txt
+        files: dns2tcp-plus@*
         draft: false
         prerelease: false
       env:
