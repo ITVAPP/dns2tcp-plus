@@ -14,11 +14,9 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <openssl/ssl.h>
-#include <openssl/err.h>
 #include "libev/ev.h"
 
-#define DNS2TCP_PLUS_VER "dns2tcp-plus v2.0.0"
+#define DNS2TCP_PLUS_VER "dns2tcp-plus v1.3.0"
 
 #ifndef IPV6_V6ONLY
   #define IPV6_V6ONLY 26
@@ -36,7 +34,7 @@
 #define IP6STRLEN INET6_ADDRSTRLEN
 #define PORTSTRLEN 6
 #define DNS_MSGSZ 1472
-#define MAX_SERVERS 16
+#define MAX_SERVERS 8
 
 /* DNS协议相关定义 */
 #define DNS_HEADER_SIZE 12
@@ -45,12 +43,6 @@
 #define DNS_CLASS_IN 1
 #define DNS_MAX_NAME_LEN 255
 #define DNS_COMPRESSION_MASK 0xC0
-
-/* 协议类型定义 */
-typedef enum {
-    PROTO_TCP = 0,
-    PROTO_DOT = 1
-} server_proto_t;
 
 /* 工具宏定义 */
 #define __unused __attribute__((unused))
@@ -121,10 +113,6 @@ typedef struct {
     char         ipstr[IP6STRLEN];
     uint16_t     port;
     union skaddr skaddr;
-    server_proto_t protocol;
-    char         hostname[256];
-    SSL_SESSION  *ssl_session;  /* SSL会话缓存 */
-    bool         is_system_dns; /* 标记是否为系统DNS */
 } server_info_t;
 
 /* TCP连接结构体 */
@@ -137,9 +125,6 @@ typedef struct tcp_conn {
     char         buffer[2 + DNS_MSGSZ] alignto(__alignof__(uint16_t));
     uint16_t     nbytes;
     struct tcp_conn *pool_next;
-    SSL         *ssl;
-    bool         ssl_connected;
-    bool         ssl_handshake_done;
 } tcp_conn_t;
 
 /* 请求上下文结构体 */
@@ -152,18 +137,11 @@ typedef struct ctx {
     bool         response_sent;
     int          active_conns;
     struct ctx  *pool_next;
-    /* 系统DNS响应缓存 */
-    char         system_dns_response[DNS_MSGSZ];
-    uint16_t     system_dns_response_len;
-    bool         has_system_dns_response;
-    /* 内置DNS计数 */
-    int          builtin_dns_count;
-    int          builtin_dns_failed;
 } ctx_t;
 
 /* 内存池配置 */
-#define CTX_POOL_SIZE 256
-#define CONN_POOL_SIZE 2048
+#define CTX_POOL_SIZE 128
+#define CONN_POOL_SIZE 1024
 
 static ctx_t ctx_pool[CTX_POOL_SIZE];
 static ctx_t *ctx_free_list = NULL;
@@ -172,9 +150,6 @@ static int ctx_pool_initialized = 0;
 static tcp_conn_t conn_pool[CONN_POOL_SIZE];
 static tcp_conn_t *conn_free_list = NULL;
 static int conn_pool_initialized = 0;
-
-/* 全局SSL上下文 */
-static SSL_CTX *g_ssl_ctx = NULL;
 
 /* 初始化上下文内存池 */
 static void init_ctx_pool(void) {
@@ -214,11 +189,6 @@ static ctx_t *alloc_ctx(void) {
     ctx->response_sent = false;
     ctx->active_conns = 0;
     memset(ctx->connections, 0, sizeof(ctx->connections));
-    /* 初始化系统DNS响应缓存 */
-    ctx->system_dns_response_len = 0;
-    ctx->has_system_dns_response = false;
-    ctx->builtin_dns_count = 0;
-    ctx->builtin_dns_failed = 0;
     
     return ctx;
 }
@@ -240,9 +210,6 @@ static tcp_conn_t *alloc_conn(void) {
     conn_free_list = conn->pool_next;
     
     conn->nbytes = 0;
-    conn->ssl = NULL;
-    conn->ssl_connected = false;
-    conn->ssl_handshake_done = false;
     
     return conn;
 }
@@ -468,7 +435,6 @@ enum {
     FLAG_VERBOSE     = 1 << 2,
     FLAG_LOCAL_ADDR  = 1 << 3,
     FLAG_USE_BUILTIN = 1 << 4,
-    FLAG_NO_SYSTEM_DNS = 1 << 5,  /* 禁用系统DNS */
 };
 
 #define has_flag(flag) (g_flags & (flag))
@@ -488,12 +454,11 @@ static char         g_local_ipstr[IP6STRLEN] = {0};
 static uint16_t     g_local_port             = 0;
 static union skaddr g_local_skaddr           = {0};
 
-/* 内置DNS服务器列表 - 只保留干净的DNS服务器 */
+/* 内置DNS服务器列表 */
 static const char *g_builtin_servers[] = {
-    "8.8.8.8#53",         /* Google DNS TCP */
-    "8.8.8.8#853",        /* Google DNS over TLS */
-    "1.1.1.1#53",         /* Cloudflare DNS TCP */
-    "1.1.1.1#853",        /* Cloudflare DNS over TLS */
+    "8.8.8.8#53",
+    "1.1.1.1#53",
+    "9.9.9.9#53",
 };
 
 /* 服务器配置数组 */
@@ -502,36 +467,8 @@ static int g_server_count = 0;
 
 static void udp_recvmsg_cb(evloop_t *evloop, evio_t *watcher, int events);
 static void tcp_connect_cb(evloop_t *evloop, evio_t *watcher, int events);
-static void ssl_handshake_cb(evloop_t *evloop, evio_t *watcher, int events);
 static void tcp_sendmsg_cb(evloop_t *evloop, evio_t *watcher, int events);
 static void tcp_recvmsg_cb(evloop_t *evloop, evio_t *watcher, int events);
-
-/* 初始化SSL上下文 */
-static int init_ssl_context(void) {
-    SSL_library_init();
-    SSL_load_error_strings();
-    OpenSSL_add_all_algorithms();
-    
-    g_ssl_ctx = SSL_CTX_new(TLS_client_method());
-    if (!g_ssl_ctx) {
-        log_error("SSL_CTX_new failed");
-        return -1;
-    }
-    
-    /* 设置验证模式（简化配置，不验证证书） */
-    SSL_CTX_set_verify(g_ssl_ctx, SSL_VERIFY_NONE, NULL);
-    
-    /* 设置默认的cipher suites */
-    SSL_CTX_set_cipher_list(g_ssl_ctx, "HIGH:!aNULL:!kRSA:!PSK:!SRP:!MD5:!RC4");
-    
-    /* 启用SSL会话缓存 */
-    SSL_CTX_set_session_cache_mode(g_ssl_ctx, SSL_SESS_CACHE_CLIENT);
-    SSL_CTX_sess_set_cache_size(g_ssl_ctx, 128);  /* 缓存大小 */
-    SSL_CTX_set_timeout(g_ssl_ctx, 300);  /* 会话超时5分钟 */
-    
-    log_info("SSL context initialized with session cache");
-    return 0;
-}
 
 /* 打印程序帮助信息 */
 static void print_help(void) {
@@ -544,7 +481,6 @@ static void print_help(void) {
            " -6                      set IPV6_V6ONLY option for udp socket\n"
            " -r                      set SO_REUSEPORT option for udp socket\n"
            " -b                      disable builtin servers\n"
-           " -f                      disable system DNS (no fallback)\n"
            " -v                      print verbose log, used for debugging\n"
            " -V                      print version number of dns2tcp-plus and exit\n"
            " -h                      print help information of dns2tcp-plus and exit\n"
@@ -568,7 +504,7 @@ static bool server_exists(const char *ipstr, uint16_t port) {
 }
 
 /* 添加服务器到全局列表 */
-static void add_server(const char *ipstr, uint16_t port, int family, bool is_system_dns) {
+static void add_server(const char *ipstr, uint16_t port, int family) {
     if (g_server_count >= MAX_SERVERS) {
         log_warning("server list is full, ignore %s#%hu", ipstr, port);
         return;
@@ -583,30 +519,9 @@ static void add_server(const char *ipstr, uint16_t port, int family, bool is_sys
     strcpy(server->ipstr, ipstr);
     server->port = port;
     skaddr_from_text(&server->skaddr, family, ipstr, port);
-    server->ssl_session = NULL;  /* 初始化SSL会话缓存 */
-    server->is_system_dns = is_system_dns;  /* 设置系统DNS标记 */
-    
-    /* 自动检测协议类型：853端口使用DoT，系统DNS始终使用TCP */
-    if (port == 853 && !is_system_dns) {
-        server->protocol = PROTO_DOT;
-        strcpy(server->hostname, ipstr);  /* 使用IP作为hostname */
-        
-        /* 为知名DNS服务器设置正确的hostname */
-        if (strcmp(ipstr, "1.1.1.1") == 0) {
-            strcpy(server->hostname, "1dot1dot1dot1.cloudflare-dns.com");
-        } else if (strcmp(ipstr, "8.8.8.8") == 0) {
-            strcpy(server->hostname, "dns.google");
-        }
-    } else {
-        server->protocol = PROTO_TCP;
-        strcpy(server->hostname, ipstr);
-    }
-    
     g_server_count++;
     
-    const char *proto_str = (server->protocol == PROTO_DOT) ? "DoT" : "TCP";
-    const char *type_str = is_system_dns ? " (system)" : "";
-    log_info("add %s server: %s#%hu%s", proto_str, ipstr, port, type_str);
+    log_info("add tcp remote addr: %s#%hu", ipstr, port);
 }
 
 /* 查找服务器在列表中的索引 */
@@ -650,7 +565,7 @@ static void parse_addr(const char *addr, enum addr_type addr_type) {
             skaddr_from_text(&g_listen_skaddr, family, ipstr, port);
             break;
         case ADDR_TCP_REMOTE:
-            add_server(ipstr, port, family, false);
+            add_server(ipstr, port, family);
             break;
         case ADDR_TCP_LOCAL:
             strcpy(g_local_ipstr, ipstr);
@@ -775,53 +690,6 @@ static void init_builtin_servers(void) {
     }
 }
 
-/* 加载系统DNS配置 */
-static void load_system_dns(void) {
-    FILE *fp = fopen("/etc/resolv.conf", "r");
-    if (!fp) {
-        log_warning("cannot open /etc/resolv.conf: %m");
-        return;
-    }
-    
-    int loaded_count = 0;
-    char line[256];
-    while (fgets(line, sizeof(line), fp)) {
-        /* 跳过注释行 */
-        if (line[0] == '#' || line[0] == ';') continue;
-        
-        char *p = strstr(line, "nameserver");
-        if (!p) continue;
-        
-        p += 10;  /* 跳过 "nameserver" */
-        while (*p == ' ' || *p == '\t') p++;
-        
-        char ipstr[IP6STRLEN] = {0};
-        if (sscanf(p, "%s", ipstr) != 1) continue;
-        
-        /* 移除可能的端口号（系统DNS通常不带端口） */
-        char *port_sep = strchr(ipstr, '#');
-        if (port_sep) *port_sep = '\0';
-        
-        int family = get_ipstr_family(ipstr);
-        if (family == -1) {
-            log_verbose("invalid system DNS address: %s", ipstr);
-            continue;
-        }
-        
-        /* 添加系统DNS（第四个参数为true表示是系统DNS） */
-        add_server(ipstr, 53, family, true);
-        loaded_count++;
-    }
-    
-    fclose(fp);
-    
-    if (loaded_count > 0) {
-        log_info("loaded %d system DNS servers from /etc/resolv.conf", loaded_count);
-    } else {
-        log_warning("no valid system DNS found in /etc/resolv.conf");
-    }
-}
-
 /* 初始化恶意IP过滤列表 */
 static void init_bad_ips(void) {
     for (int i = 0; g_bad_ipv4[i] && g_bad_ipv4_count < MAX_BAD_IPS; i++) {
@@ -844,7 +712,7 @@ static void parse_opt(int argc, char *argv[]) {
 
     opterr = 0;
     int shortopt;
-    const char *optstr = "L:R:D:l:s:6rbfvVh";  /* 添加'f'选项 */
+    const char *optstr = "L:R:D:l:s:6rbvVh";
     while ((shortopt = getopt(argc, argv, optstr)) != -1) {
         switch (shortopt) {
             case 'L':
@@ -888,9 +756,6 @@ static void parse_opt(int argc, char *argv[]) {
             case 'b':
                 disable_builtin = true;
                 break;
-            case 'f':
-                add_flag(FLAG_NO_SYSTEM_DNS);
-                break;
             case 'v':
                 add_flag(FLAG_VERBOSE);
                 break;
@@ -920,11 +785,6 @@ static void parse_opt(int argc, char *argv[]) {
     if (!disable_builtin) {
         add_flag(FLAG_USE_BUILTIN);
         init_builtin_servers();
-    }
-
-    /* 加载系统DNS（除非用-f禁用） */
-    if (!has_flag(FLAG_NO_SYSTEM_DNS)) {
-        load_system_dns();
     }
 
     if (g_server_count == 0) {
@@ -992,15 +852,9 @@ int main(int argc, char *argv[]) {
     init_conn_pool();
     init_bad_ips();
 
-    /* 初始化SSL上下文 */
-    if (init_ssl_context() < 0) {
-        return 1;
-    }
-
     log_info("udp listen addr: %s#%hu", g_listen_ipstr, g_listen_port);
     log_info("total %d tcp remote servers", g_server_count);
     if (has_flag(FLAG_USE_BUILTIN)) log_info("builtin servers enabled");
-    if (has_flag(FLAG_NO_SYSTEM_DNS)) log_info("system DNS disabled");
     if (has_flag(FLAG_LOCAL_ADDR)) log_info("tcp local addr: %s#%hu", g_local_ipstr, g_local_port);
     if (g_syn_cnt) log_info("enable TCP_SYNCNT:%hhu sockopt", g_syn_cnt);
     if (has_flag(FLAG_IPV6_V6ONLY)) log_info("enable IPV6_V6ONLY sockopt");
@@ -1030,27 +884,6 @@ int main(int argc, char *argv[]) {
 static void free_tcp_conn(tcp_conn_t *conn, evloop_t *evloop) {
     if (conn) {
         ev_io_stop(evloop, &conn->watcher);
-        
-        if (conn->ssl) {
-            /* 保存SSL会话以供后续复用 */
-            if (conn->ssl_handshake_done && conn->server_idx >= 0 && conn->server_idx < g_server_count) {
-                SSL_SESSION *session = SSL_get1_session(conn->ssl);
-                if (session) {
-                    if (g_servers[conn->server_idx].ssl_session) {
-                        SSL_SESSION_free(g_servers[conn->server_idx].ssl_session);
-                    }
-                    g_servers[conn->server_idx].ssl_session = session;
-                    log_verbose("saved SSL session for server %s#%hu", 
-                               g_servers[conn->server_idx].ipstr, 
-                               g_servers[conn->server_idx].port);
-                }
-            }
-            
-            SSL_shutdown(conn->ssl);
-            SSL_free(conn->ssl);
-            conn->ssl = NULL;
-        }
-        
         close(conn->watcher.fd);
         free_conn_to_pool(conn);
     }
@@ -1145,11 +978,6 @@ static void udp_recvmsg_cb(evloop_t *evloop, evio_t *watcher __unused, int event
                 continue;
             }
             
-            /* 统计内置DNS数量 */
-            if (!g_servers[server_idx].is_system_dns) {
-                ctx->builtin_dns_count++;
-            }
-            
             conn->server_idx = server_idx;
             conn->parent_ctx = ctx;
             
@@ -1192,11 +1020,6 @@ static void udp_recvmsg_cb(evloop_t *evloop, evio_t *watcher __unused, int event
                 continue;
             }
             
-            /* 统计内置DNS数量 */
-            if (!g_servers[i].is_system_dns) {
-                ctx->builtin_dns_count++;
-            }
-            
             conn->server_idx = i;
             conn->parent_ctx = ctx;
             
@@ -1222,8 +1045,7 @@ static void udp_recvmsg_cb(evloop_t *evloop, evio_t *watcher __unused, int event
                 continue;
             }
             
-            log_verbose("try to connect to %s#%hu%s", g_servers[i].ipstr, g_servers[i].port,
-                       g_servers[i].is_system_dns ? " (system)" : "");
+            log_verbose("try to connect to %s#%hu", g_servers[i].ipstr, g_servers[i].port);
 
             ev_io_init(&conn->watcher, tcp_connect_cb, fd, EV_WRITE);
             ev_io_start(evloop, &conn->watcher);
@@ -1251,14 +1073,7 @@ static void tcp_connect_cb(evloop_t *evloop, evio_t *watcher, int events __unuse
     server_info_t *server = &g_servers[conn->server_idx];
 
     if (getsockopt(watcher->fd, SOL_SOCKET, SO_ERROR, &errno, &(socklen_t){sizeof(errno)}) < 0 || errno) {
-        log_warning("connect to %s#%hu%s: %m", server->ipstr, server->port,
-                   server->is_system_dns ? " (system)" : "");
-        
-        /* 如果是内置DNS失败，增加失败计数 */
-        if (!server->is_system_dns) {
-            ctx->builtin_dns_failed++;
-        }
-        
+        log_warning("connect to %s#%hu: %m", server->ipstr, server->port);
         ctx->active_conns--;
         
         for (int i = 0; i < ctx->conn_count; i++) {
@@ -1270,142 +1085,17 @@ static void tcp_connect_cb(evloop_t *evloop, evio_t *watcher, int events __unuse
         
         free_tcp_conn(conn, evloop);
         
-        /* 检查是否需要使用缓存的系统DNS响应 */
         if (ctx->active_conns == 0 && !ctx->response_sent) {
-            if (ctx->has_system_dns_response) {
-                log_info("all builtin DNS failed, using cached system DNS response");
-                send_response_and_cleanup(ctx, evloop, ctx->system_dns_response, 
-                                        ctx->system_dns_response_len);
-            } else {
-                free_ctx(ctx, evloop);
-            }
+            free_ctx(ctx, evloop);
         }
         return;
     }
     
-    log_verbose("TCP connect to %s#%hu%s succeed", server->ipstr, server->port,
-               server->is_system_dns ? " (system)" : "");
+    log_verbose("connect to %s#%hu succeed", server->ipstr, server->port);
 
-    /* 如果是DoT连接（仅内置DNS使用），初始化SSL */
-    if (server->protocol == PROTO_DOT && !server->is_system_dns) {
-        conn->ssl = SSL_new(g_ssl_ctx);
-        if (!conn->ssl) {
-            log_error("SSL_new failed");
-            
-            if (!server->is_system_dns) {
-                ctx->builtin_dns_failed++;
-            }
-            
-            ctx->active_conns--;
-            
-            for (int i = 0; i < ctx->conn_count; i++) {
-                if (ctx->connections[i] == conn) {
-                    ctx->connections[i] = NULL;
-                    break;
-                }
-            }
-            
-            free_tcp_conn(conn, evloop);
-            
-            if (ctx->active_conns == 0 && !ctx->response_sent) {
-                if (ctx->has_system_dns_response) {
-                    log_info("all builtin DNS failed, using cached system DNS response");
-                    send_response_and_cleanup(ctx, evloop, ctx->system_dns_response, 
-                                            ctx->system_dns_response_len);
-                } else {
-                    free_ctx(ctx, evloop);
-                }
-            }
-            return;
-        }
-        
-        SSL_set_fd(conn->ssl, watcher->fd);
-        SSL_set_tlsext_host_name(conn->ssl, server->hostname);
-        SSL_set_connect_state(conn->ssl);
-        
-        /* 尝试复用之前的SSL会话 */
-        if (server->ssl_session) {
-            SSL_set_session(conn->ssl, server->ssl_session);
-            log_verbose("reusing SSL session for %s#%hu", server->ipstr, server->port);
-        }
-        
-        conn->ssl_connected = true;
-        conn->ssl_handshake_done = false;
-        
-        /* 开始SSL握手 */
-        ev_set_cb(watcher, ssl_handshake_cb);
-        ev_invoke(evloop, watcher, EV_WRITE);
-        return;
-    }
-    
-    /* TCP连接，直接发送数据 */
     conn->nbytes = 0;
     ev_set_cb(watcher, tcp_sendmsg_cb);
     ev_invoke(evloop, watcher, EV_WRITE);
-}
-
-/* SSL握手事件回调 */
-static void ssl_handshake_cb(evloop_t *evloop, evio_t *watcher, int events __unused) {
-    tcp_conn_t *conn = container_of(watcher, tcp_conn_t, watcher);
-    ctx_t *ctx = conn->parent_ctx;
-    server_info_t *server = &g_servers[conn->server_idx];
-    
-    int ret = SSL_do_handshake(conn->ssl);
-    if (ret == 1) {
-        /* 握手成功 */
-        conn->ssl_handshake_done = true;
-        
-        /* 检查是否复用了会话 */
-        if (SSL_session_reused(conn->ssl)) {
-            log_verbose("SSL session reused for %s#%hu", server->ipstr, server->port);
-        } else {
-            log_verbose("SSL new session for %s#%hu", server->ipstr, server->port);
-        }
-        
-        conn->nbytes = 0;
-        ev_set_cb(watcher, tcp_sendmsg_cb);
-        ev_invoke(evloop, watcher, EV_WRITE);
-        return;
-    }
-    
-    int ssl_error = SSL_get_error(conn->ssl, ret);
-    if (ssl_error == SSL_ERROR_WANT_READ) {
-        ev_io_stop(evloop, watcher);
-        ev_io_init(watcher, ssl_handshake_cb, watcher->fd, EV_READ);
-        ev_io_start(evloop, watcher);
-        return;
-    } else if (ssl_error == SSL_ERROR_WANT_WRITE) {
-        ev_io_stop(evloop, watcher);
-        ev_io_init(watcher, ssl_handshake_cb, watcher->fd, EV_WRITE);
-        ev_io_start(evloop, watcher);
-        return;
-    }
-    
-    /* 握手失败 */
-    log_warning("SSL handshake with %s#%hu failed: %d", server->ipstr, server->port, ssl_error);
-    
-    if (!server->is_system_dns) {
-        ctx->builtin_dns_failed++;
-    }
-    
-    ctx->active_conns--;
-    for (int i = 0; i < ctx->conn_count; i++) {
-        if (ctx->connections[i] == conn) {
-            ctx->connections[i] = NULL;
-            break;
-        }
-    }
-    free_tcp_conn(conn, evloop);
-    
-    if (ctx->active_conns == 0 && !ctx->response_sent) {
-        if (ctx->has_system_dns_response) {
-            log_info("all builtin DNS failed, using cached system DNS response");
-            send_response_and_cleanup(ctx, evloop, ctx->system_dns_response, 
-                                    ctx->system_dns_response_len);
-        } else {
-            free_ctx(ctx, evloop);
-        }
-    }
 }
 
 /* TCP数据发送事件回调 */
@@ -1427,78 +1117,29 @@ static void tcp_sendmsg_cb(evloop_t *evloop, evio_t *watcher, int events __unuse
     }
 
     uint16_t datalen = 2 + ctx->query_len;
-    ssize_t nsend;
     
-    /* 根据协议类型选择发送方式 */
-    if (server->protocol == PROTO_DOT && conn->ssl) {
-        nsend = SSL_write(conn->ssl, (void *)ctx->query_buffer + conn->nbytes, 
-                         datalen - conn->nbytes);
-        if (nsend <= 0) {
-            int ssl_error = SSL_get_error(conn->ssl, nsend);
-            if (ssl_error == SSL_ERROR_WANT_WRITE || ssl_error == SSL_ERROR_WANT_READ) {
-                return; /* 需要继续等待 */
+    ssize_t nsend = send(watcher->fd, (void *)ctx->query_buffer + conn->nbytes, 
+                         datalen - conn->nbytes, 0);
+    if (nsend < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+        log_warning("send to %s#%hu: %m", server->ipstr, server->port);
+        
+        ctx->active_conns--;
+        for (int i = 0; i < ctx->conn_count; i++) {
+            if (ctx->connections[i] == conn) {
+                ctx->connections[i] = NULL;
+                break;
             }
-            log_warning("SSL_write to %s#%hu failed: %d", server->ipstr, server->port, ssl_error);
-            
-            if (!server->is_system_dns) {
-                ctx->builtin_dns_failed++;
-            }
-            
-            ctx->active_conns--;
-            for (int i = 0; i < ctx->conn_count; i++) {
-                if (ctx->connections[i] == conn) {
-                    ctx->connections[i] = NULL;
-                    break;
-                }
-            }
-            free_tcp_conn(conn, evloop);
-            
-            if (ctx->active_conns == 0 && !ctx->response_sent) {
-                if (ctx->has_system_dns_response) {
-                    log_info("all builtin DNS failed, using cached system DNS response");
-                    send_response_and_cleanup(ctx, evloop, ctx->system_dns_response, 
-                                            ctx->system_dns_response_len);
-                } else {
-                    free_ctx(ctx, evloop);
-                }
-            }
-            return;
         }
-    } else {
-        nsend = send(watcher->fd, (void *)ctx->query_buffer + conn->nbytes, 
-                     datalen - conn->nbytes, 0);
-        if (nsend < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
-            log_warning("send to %s#%hu: %m", server->ipstr, server->port);
-            
-            if (!server->is_system_dns) {
-                ctx->builtin_dns_failed++;
-            }
-            
-            ctx->active_conns--;
-            for (int i = 0; i < ctx->conn_count; i++) {
-                if (ctx->connections[i] == conn) {
-                    ctx->connections[i] = NULL;
-                    break;
-                }
-            }
-            free_tcp_conn(conn, evloop);
-            
-            if (ctx->active_conns == 0 && !ctx->response_sent) {
-                if (ctx->has_system_dns_response) {
-                    log_info("all builtin DNS failed, using cached system DNS response");
-                    send_response_and_cleanup(ctx, evloop, ctx->system_dns_response, 
-                                            ctx->system_dns_response_len);
-                } else {
-                    free_ctx(ctx, evloop);
-                }
-            }
-            return;
+        free_tcp_conn(conn, evloop);
+        
+        if (ctx->active_conns == 0 && !ctx->response_sent) {
+            free_ctx(ctx, evloop);
         }
+        return;
     }
     
-    log_verbose("send to %s#%hu%s, nsend:%zd", server->ipstr, server->port,
-               server->is_system_dns ? " (system)" : "", nsend);
+    log_verbose("send to %s#%hu, nsend:%zd", server->ipstr, server->port, nsend);
 
     conn->nbytes += nsend;
     if (conn->nbytes >= datalen) {
@@ -1528,37 +1169,21 @@ static void tcp_recvmsg_cb(evloop_t *evloop, evio_t *watcher, int events __unuse
     }
 
     void *buffer = conn->buffer;
-    ssize_t nrecv;
     
-    /* 根据协议类型选择接收方式 */
-    if (server->protocol == PROTO_DOT && conn->ssl) {
-        nrecv = SSL_read(conn->ssl, buffer + conn->nbytes, 
-                        2 + DNS_MSGSZ - conn->nbytes);
-        if (nrecv <= 0) {
-            int ssl_error = SSL_get_error(conn->ssl, nrecv);
-            if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
-                return; /* 需要继续等待 */
-            }
-            log_warning("SSL_read from %s#%hu failed: %d", server->ipstr, server->port, ssl_error);
-            goto cleanup_conn;
-        }
-    } else {
-        nrecv = recv(watcher->fd, buffer + conn->nbytes, 
-                     2 + DNS_MSGSZ - conn->nbytes, 0);
-        if (nrecv < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
-            log_warning("recv from %s#%hu: %m", server->ipstr, server->port);
-            goto cleanup_conn;
-        }
-        
-        if (nrecv == 0) {
-            log_warning("recv from %s#%hu: connection is closed", server->ipstr, server->port);
-            goto cleanup_conn;
-        }
+    ssize_t nrecv = recv(watcher->fd, buffer + conn->nbytes, 
+                         2 + DNS_MSGSZ - conn->nbytes, 0);
+    if (nrecv < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+        log_warning("recv from %s#%hu: %m", server->ipstr, server->port);
+        goto cleanup_conn;
     }
     
-    log_verbose("recv from %s#%hu%s, nrecv:%zd", server->ipstr, server->port,
-               server->is_system_dns ? " (system)" : "", nrecv);
+    if (nrecv == 0) {
+        log_warning("recv from %s#%hu: connection is closed", server->ipstr, server->port);
+        goto cleanup_conn;
+    }
+    
+    log_verbose("recv from %s#%hu, nrecv:%zd", server->ipstr, server->port, nrecv);
 
     conn->nbytes += nrecv;
     
@@ -1569,41 +1194,16 @@ static void tcp_recvmsg_cb(evloop_t *evloop, evio_t *watcher, int events __unuse
     
     /* 检测并过滤恶意IP响应 */
     if (is_bad_response((uint8_t *)buffer + 2, msglen)) {
-        log_warning("bad response from %s#%hu%s, ignoring", server->ipstr, server->port,
-                   server->is_system_dns ? " (system)" : "");
+        log_warning("bad response from %s#%hu, ignoring", server->ipstr, server->port);
         goto cleanup_conn;
     }
     
-    /* 如果是内置DNS的响应，立即使用 */
-    if (!server->is_system_dns) {
-        log_info("got response from %s#%hu (builtin DNS, winner)", server->ipstr, server->port);
-        send_response_and_cleanup(ctx, evloop, buffer + 2, msglen);
-        return;
-    }
+    log_info("got response from %s#%hu (winner)", server->ipstr, server->port);
     
-    /* 如果是系统DNS的响应，缓存起来 */
-    log_info("got response from %s#%hu (system DNS, cached)", server->ipstr, server->port);
-    memcpy(ctx->system_dns_response, buffer + 2, msglen);
-    ctx->system_dns_response_len = msglen;
-    ctx->has_system_dns_response = true;
-    
-    /* 检查是否所有内置DNS都失败了 */
-    if (ctx->builtin_dns_failed >= ctx->builtin_dns_count && ctx->builtin_dns_count > 0) {
-        log_info("all builtin DNS failed, using system DNS response");
-        send_response_and_cleanup(ctx, evloop, ctx->system_dns_response, 
-                                ctx->system_dns_response_len);
-        return;
-    }
-    
-    /* 继续等待内置DNS的响应 */
-    goto cleanup_conn_no_check;
+    send_response_and_cleanup(ctx, evloop, buffer + 2, msglen);
+    return;
 
 cleanup_conn:
-    if (!server->is_system_dns) {
-        ctx->builtin_dns_failed++;
-    }
-    
-cleanup_conn_no_check:
     ctx->active_conns--;
     for (int i = 0; i < ctx->conn_count; i++) {
         if (ctx->connections[i] == conn) {
@@ -1613,14 +1213,7 @@ cleanup_conn_no_check:
     }
     free_tcp_conn(conn, evloop);
     
-    /* 如果所有连接都结束了 */
     if (ctx->active_conns == 0 && !ctx->response_sent) {
-        if (ctx->has_system_dns_response) {
-            log_info("no more active connections, using cached system DNS response");
-            send_response_and_cleanup(ctx, evloop, ctx->system_dns_response, 
-                                    ctx->system_dns_response_len);
-        } else {
-            free_ctx(ctx, evloop);
-        }
+        free_ctx(ctx, evloop);
     }
 }

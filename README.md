@@ -2,13 +2,13 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/ITVAPP/dns2tcp-plus/releases)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](https://github.com/ITVAPP/dns2tcp-plus/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-linux-lightgrey.svg)](https://github.com/ITVAPP/dns2tcp-plus)
 
 English | [简体中文](README_CN.md)
 
-A powerful DNS tool that converts DNS queries from UDP to TCP/TLS, featuring multi-server race queries, DNS over TLS support, and intelligent failover mechanisms.
+A lightweight DNS tool that converts DNS queries from UDP to TCP, featuring multi-server race queries to significantly improve DNS resolution speed and reliability.
 
 </div>
 
@@ -16,39 +16,35 @@ A powerful DNS tool that converts DNS queries from UDP to TCP/TLS, featuring mul
 
 ## ✨ Key Features
 
-- 🔒 **DNS over TLS (DoT)** - Automatic encryption for port 853, secure DNS queries
 - 🏃 **Race Queries** - Query multiple servers simultaneously, use the fastest response
-- 🔄 **Smart Failover** - Prioritize built-in DNS, automatically fallback to system DNS
-- 🌍 **Hybrid DNS** - Seamlessly combine built-in servers with system DNS
-- 🛡️ **DNS Response Validation** - Auto-filter poisoned responses, prevent DNS hijacking
-- 🎯 **Smart Domain Routing** - Choose optimal servers based on domain suffix
-- ⚡ **High Performance** - Memory pool optimization, SSL session caching
-- 🔧 **Zero Configuration** - Auto-detect system DNS, works out of the box
+- 🌍 **Built-in Public DNS** - Includes 3 well-known public DNS servers by default
+- 🛡️ **DNS Response Validation** - Automatically filters responses with invalid IPs, prevents DNS poisoning
+- 🎯 **Smart Domain Routing** - Choose optimal servers based on domain suffix, reduce latency
+- ⚡ **High Performance** - Event-driven with libev, supports high concurrency
+- 🔧 **Zero Configuration** - No config files needed, just command-line arguments
+- 📦 **Lightweight** - Small static binary with minimal resource usage
 
-## 🆕 v2.0.0 Major Update
+## 🆕 v1.3.0 New Features
 
-### 1. DNS over TLS (DoT) Support
-- Automatic encryption for port 853 queries
-- SSL session caching for improved performance
-- Support for major DoT providers (Google, Cloudflare)
-- Zero configuration required
+### 1. DNS Response Validation
+Automatically detects and filters DNS responses containing:
+- `0.0.0.0` - Invalid address
+- `127.0.0.1` / `::1` - Loopback (when querying external domains)
+- `10.10.10.10` - Some ISP hijacking addresses
+- More suspicious addresses...
 
-### 2. System DNS Integration
-- Automatically loads DNS servers from `/etc/resolv.conf`
-- Acts as fallback when built-in servers fail
-- Can be disabled with `-f` flag for isolated environments
+When a poisoned response is detected, it's automatically ignored while waiting for valid responses from other servers.
 
-### 3. Intelligent Failover Mechanism
+### 2. Smart Domain Routing
+Automatically selects the most appropriate DNS servers based on domain suffix:
+
+```bash
+# Use domestic DNS for Chinese domains to avoid overseas CDN
+dns2tcp-plus -L "127.0.0.1#5353" -D "cn:223.5.5.5,119.29.29.29"
+
+# Specify dedicated DNS for specific sites
+dns2tcp-plus -L "127.0.0.1#5353" -D "google.com:8.8.8.8" -D "github.com:1.1.1.1"
 ```
-Built-in DNS (priority) → System DNS (fallback)
-     ↓ All failed              ↓
-     └──────────────→ Use cached system response
-```
-
-### 4. Performance Optimizations
-- Memory pool for connection and context management
-- SSL session reuse reduces handshake overhead
-- Improved concurrent handling up to 256 queries
 
 ## 📦 Installation
 
@@ -58,7 +54,7 @@ Download the static binary for your architecture from [Releases](https://github.
 
 ```bash
 # Download (example for linux-amd64)
-wget https://github.com/ITVAPP/dns2tcp-plus/releases/download/v2.0.0/dns2tcp-plus-linux-amd64
+wget https://github.com/ITVAPP/dns2tcp-plus/releases/download/v1.3.0/dns2tcp-plus-linux-amd64
 chmod +x dns2tcp-plus-linux-amd64
 sudo mv dns2tcp-plus-linux-amd64 /usr/local/bin/dns2tcp-plus
 
@@ -74,241 +70,183 @@ cd dns2tcp-plus
 make && sudo make install
 ```
 
-Dependencies:
-- libev
-- OpenSSL (for DoT support)
-
 ## 🚀 Quick Start
 
 ### Basic Usage
 
 ```bash
-# Simplest usage - combines built-in + system DNS
+# Use built-in public DNS servers (simplest)
 dns2tcp-plus -L "127.0.0.1#5353"
 
 # Test DNS resolution
 dig @127.0.0.1 -p 5353 google.com
-
-# Test DNS over TLS
-dig @127.0.0.1 -p 5353 +tcp cloudflare.com
 ```
 
-### DNS over TLS Examples
+### Domain Routing Examples
 
 ```bash
-# Add custom DoT servers
+# Smart routing for domestic and international domains
 dns2tcp-plus -L "127.0.0.1#5353" \
-  -R "1.1.1.1#853" \
-  -R "8.8.8.8#853" \
-  -R "9.9.9.9#853"
+  -D "cn:223.5.5.5,119.29.29.29" \
+  -D "com.cn:223.5.5.5,119.29.29.29" \
+  -D "baidu.com:223.5.5.5" \
+  -D "taobao.com:223.5.5.5"
 
-# Mix TCP and DoT servers
+# Use internal DNS for corporate domains
 dns2tcp-plus -L "127.0.0.1#5353" \
-  -R "223.5.5.5#53" \      # TCP
-  -R "1.1.1.1#853"         # DoT
+  -D "internal.company.com:192.168.1.1" \
+  -D "local:192.168.1.1"
 ```
 
-### Domain Routing with DoT
+### Anti-poisoning Configuration
 
 ```bash
-# Use DoT for sensitive domains
-dns2tcp-plus -L "127.0.0.1#5353" \
-  -D "gmail.com:8.8.8.8#853" \
-  -D "banking.com:1.1.1.1#853" \
-  -D "cn:223.5.5.5#53"
+# Enable verbose logging to see poisoning detection
+dns2tcp-plus -L "127.0.0.1#5353" -v
+
+# Log examples:
+# dns2tcp-plus: bad IPv4 detected: 10.10.10.10
+# dns2tcp-plus: bad response from 202.106.0.20#53, ignoring
 ```
 
-### System DNS Control
+## 🌐 Built-in DNS Servers
 
-```bash
-# Disable system DNS (built-in only)
-dns2tcp-plus -L "127.0.0.1#5353" -f
+The following well-known public DNS servers are included by default:
 
-# Disable built-in servers (system only)
-dns2tcp-plus -L "127.0.0.1#5353" -b
-
-# Custom mix
-dns2tcp-plus -L "127.0.0.1#5353" \
-  -R "8.8.8.8#853" \      # Add DoT
-  -b                       # Disable other built-ins, keep system
-```
-
-## 🌐 Built-in Servers
-
-### TCP Servers (Port 53)
 | Provider | Address | Description |
 |----------|---------|-------------|
-| Google | 8.8.8.8 | Global coverage, reliable |
-| Cloudflare | 1.1.1.1 | Privacy-focused, fast |
+| Google | 8.8.8.8 | Global coverage, stable and fast |
+| Cloudflare | 1.1.1.1 | Privacy-focused, excellent performance |
+| Quad9 | 9.9.9.9 | Security-focused, filters malicious websites |
 
-### DoT Servers (Port 853)
-| Provider | Address | Hostname | Description |
-|----------|---------|----------|-------------|
-| Google | 8.8.8.8 | dns.google | Encrypted Google DNS |
-| Cloudflare | 1.1.1.1 | 1dot1dot1dot1.cloudflare-dns.com | Encrypted Cloudflare |
-
-### System DNS
-Automatically loaded from `/etc/resolv.conf` as fallback servers.
+> 💡 Use `-b` parameter to disable built-in servers
 
 ## 🛠️ Command Line Options
 
-| Option | Description | Default | Limits |
-|--------|-------------|---------|--------|
-| `-L <ip[#port]>` | UDP listen address | Port defaults to 53 | - |
-| `-R <ip[#port]>` | TCP/DoT remote server | Port 53=TCP, 853=DoT | Max 16 servers total |
-| `-D <suffix:servers>` | Domain routing rule | None | Max 16 rules, 8 servers per rule |
-| `-l <ip[#port]>` | TCP local address | System assigned | - |
-| `-s <syncnt>` | TCP SYN retry count | System default | - |
-| `-6` | Enable IPv6-only mode | Disabled | - |
-| `-r` | Enable SO_REUSEPORT | Disabled | - |
-| `-b` | Disable built-in servers | Built-in enabled | - |
-| **`-f`** | Disable system DNS | System DNS enabled | - |
-| `-v` | Verbose logging | Disabled | - |
-| `-V` | Show version | - | - |
-| `-h` | Show help | - | - |
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-L <ip[#port]>` | UDP listen address | Port defaults to 53 |
+| `-R <ip[#port]>` | TCP remote server (can specify multiple) | Port defaults to 53 |
+| **`-D <suffix:servers>`** | Domain routing rule | None |
+| `-l <ip[#port]>` | TCP local address (source) | System assigned |
+| `-s <syncnt>` | TCP SYN retry count | System default |
+| `-6` | Enable IPv6-only mode | Disabled |
+| `-r` | Enable SO_REUSEPORT | Disabled |
+| `-b` | Disable built-in DNS servers | Built-in enabled |
+| `-v` | Verbose logging mode | Disabled |
+| `-V` | Show version | - |
+| `-h` | Show help | - |
 
-## 💡 Advanced Usage
+### Domain Routing Rule Format
 
-### 1. Maximum Security Configuration
-
-```bash
-# DoT only, no fallback to unencrypted
-dns2tcp-plus -L "127.0.0.1#5353" \
-  -R "1.1.1.1#853" \
-  -R "8.8.8.8#853" \
-  -R "9.9.9.9#853" \
-  -b -f  # Disable all non-DoT servers
+```
+-D "domain_suffix:server1,server2,..."
 ```
 
-### 2. Performance Optimized Setup
+Examples:
+- `-D "cn:223.5.5.5,119.29.29.29"` - Use specified DNS for .cn domains
+- `-D "google.com:8.8.8.8"` - Use 8.8.8.8 for google.com and subdomains
+- `-D "local:192.168.1.1"` - Use internal DNS for .local domains
 
-```bash
-# Mix of fast TCP and secure DoT
-dns2tcp-plus -L "0.0.0.0#53" \
-  -D "sensitive.com:1.1.1.1#853" \
-  -D "local:192.168.1.1#53" \
-  -r  # Enable SO_REUSEPORT for load balancing
-```
+## 💡 Usage Tips
 
-### 3. Enterprise Configuration
-
-```bash
-dns2tcp-plus -L "0.0.0.0#53" \
-  -D "internal.corp:10.0.0.1#53" \
-  -D "*.internal:10.0.0.1#53" \
-  -D "secure.corp:8.8.8.8#853" \
-  -s 3 \  # Quick failover
-  -v      # Verbose for monitoring
-```
-
-### 4. China Optimized Setup
+### 1. Optimize for China Access
 
 ```bash
 dns2tcp-plus -L "127.0.0.1#5353" \
-  -D "cn:223.5.5.5#53,119.29.29.29#53" \
-  -D "com.cn:223.5.5.5#53" \
-  -D "baidu.com:223.5.5.5#53" \
-  -D "international:1.1.1.1#853"  # DoT for others
+  -D "cn:223.5.5.5,119.29.29.29" \
+  -D "com.cn:223.5.5.5,119.29.29.29" \
+  -D "org.cn:223.5.5.5,119.29.29.29" \
+  -D "net.cn:223.5.5.5,119.29.29.29" \
+  -D "edu.cn:223.5.5.5,119.29.29.29" \
+  -D "gov.cn:223.5.5.5,119.29.29.29"
+```
+
+### 2. Integration with dnsmasq
+
+```bash
+# dnsmasq.conf
+server=127.0.0.1#5353
+no-resolv
+cache-size=1000
+```
+
+### 3. systemd Service Configuration
+
+```bash
+sudo tee /etc/systemd/system/dns2tcp-plus.service > /dev/null <<EOF
+[Unit]
+Description=DNS to TCP Proxy with Smart Routing
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dns2tcp-plus -L "0.0.0.0#53" -D "cn:223.5.5.5,119.29.29.29"
+Restart=always
+User=nobody
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl enable --now dns2tcp-plus
 ```
 
 ## 🏎️ How It Works
 
-### Query Flow with Failover
+### Race Query Mechanism
 
 ```
-Client Query
-    ↓
-dns2tcp-plus
-    ├─→ Built-in DNS (Priority)
-    │     ├─ 8.8.8.8:53 (TCP)
-    │     ├─ 8.8.8.8:853 (DoT) ← Encrypted
-    │     ├─ 1.1.1.1:53 (TCP)
-    │     └─ 1.1.1.1:853 (DoT) ← Encrypted
-    │
-    └─→ System DNS (Fallback)
-          ├─ 192.168.1.1:53
-          └─ 8.8.4.4:53
+Client → dns2tcp-plus → Query multiple servers → Use fastest valid response
+                         ├─ 8.8.8.8 (150ms)
+                         ├─ 1.1.1.1 (50ms) ✓ Fastest
+                         └─ 223.5.5.5 (80ms)
 ```
 
-### DoT Connection Flow
+### Domain Routing Mechanism
 
 ```
-DNS Query → TCP Socket → SSL/TLS Handshake → Encrypted Query
-                              ↓
-                        Session Cached (Reused for next query)
+Query: www.baidu.cn
+  ↓
+Match rule: cn → 223.5.5.5, 119.29.29.29
+  ↓
+Query only: 223.5.5.5 and 119.29.29.29 (skip other servers)
 ```
 
-### Response Priority
+### Response Validation Mechanism
 
-1. First valid response from built-in DNS wins
-2. System DNS responses are cached but not used unless all built-ins fail
-3. Bad IP filtering applies to all responses
+```
+Receive response → Parse IP addresses → Check if Bad IP
+                                         ├─ Yes: Discard, wait for others
+                                         └─ No: Return to client
+```
 
 ## 📊 Performance Metrics
 
-Based on v2.0.0 testing:
+Based on v1.3.0 testing:
 
-- **Concurrency**: 256 concurrent queries (limited by context pool)
-- **Max Servers**: 16 total servers (built-in + custom + system)
-- **Memory Usage**: < 3MB (with memory pools)
-- **Connection Pool**: 2048 pre-allocated connections
-- **Context Pool**: 256 pre-allocated contexts
-- **DoT Overhead**: ~30ms first query, ~5ms with session reuse
-- **Failover Time**: < 100ms to system DNS
-- **SSL Session Cache**: 128 sessions, 5-minute timeout (300s)
-- **DNS Packet Size**: Up to 1472 bytes
-- **Bad IP Filtering**: Blocks 0.0.0.0, 127.0.0.1, 10.10.10.10, 240.0.0.0
-
-## 🔒 Security Features
-
-1. **DNS over TLS**: Prevents eavesdropping and tampering
-2. **Response Validation**: Filters hijacked responses
-3. **No Certificate Validation**: Simplified deployment (use with caution)
-4. **Session Reuse**: Reduces attack surface from repeated handshakes
-
-## ⚙️ Technical Features
-
-- **TCP_NODELAY**: Optimized for low-latency DNS queries
-- **Non-blocking I/O**: Event-driven architecture with libev
-- **Memory Pools**: Zero-allocation design for hot paths
-- **DNS Compression**: Proper handling of DNS label compression
-- **Concurrent Design**: Each query spawns parallel connections
-- **Smart Buffers**: 2-byte length prefix for TCP DNS format
-- **IPv4/IPv6 Dual Stack**: Full support for both protocols
+- **Concurrency**: 128 concurrent queries
+- **Memory Usage**: < 2MB
+- **Latency Overhead**: < 1ms (local network)
+- **CPU Usage**: Negligible
+- **Filter Efficiency**: 100% detection rate, 0 false positives
 
 ## 🔄 Changelog
 
-### v2.0.0
-- 🔒 Added DNS over TLS (DoT) support with SSL session caching
-- 🔄 Added system DNS integration with intelligent failover
-- ⚡ Added memory pool optimization for connections
-- ✨ Improved built-in server configuration
-- 📝 Enhanced logging for debugging DoT connections
-
 ### v1.3.0
-- ✨ Added DNS response validation
-- ✨ Added smart domain routing
-- 🔧 Optimized DNS packet parsing
+- ✨ Added DNS response validation, auto-filter poisoned responses
+- ✨ Added smart domain routing with suffix matching rules
+- 🔧 Optimized DNS packet parsing, enhanced security
+- 📝 Improved error handling and logging
 
-## 🐛 Troubleshooting
+### v1.2.0
+- ✨ Added multi-server race query mechanism
+- ✨ Added built-in public DNS servers
+- ⚡ Enhanced concurrent processing to 128
 
-### DoT Connection Issues
-```bash
-# Enable verbose logging
-dns2tcp-plus -L "127.0.0.1#5353" -v
+## 🤝 Contributing
 
-# Check SSL handshake and session reuse
-# Look for: "SSL session reused for..." messages
-```
-
-### System DNS Not Loading
-```bash
-# Check /etc/resolv.conf format
-cat /etc/resolv.conf
-
-# Force disable system DNS if needed
-dns2tcp-plus -L "127.0.0.1#5353" -f
-```
+Issues and Pull Requests are welcome!
 
 ## 📄 License
 
@@ -318,7 +256,10 @@ This project is open-sourced under the MIT License.
 
 <div align="center">
 
+
 **If this project helps you, please give it a ⭐ Star!**
+
+**IAppPlayer - Making video playback simple yet powerful!**
 
 Made with ❤️ by ITVAPP
 
