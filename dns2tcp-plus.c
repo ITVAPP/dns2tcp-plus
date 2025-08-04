@@ -16,7 +16,7 @@
 #include <netinet/tcp.h>
 #include "libev/ev.h"
 
-#define DNS2TCP_PLUS_VER "dns2tcp-plus v1.3.0"
+#define DNS2TCP_PLUS_VER "dns2tcp-plus v1.3.1"
 
 #ifndef IPV6_V6ONLY
   #define IPV6_V6ONLY 26
@@ -35,6 +35,7 @@
 #define PORTSTRLEN 6
 #define DNS_MSGSZ 1472
 #define MAX_SERVERS 8
+#define DNS_QUERY_TIMEOUT 5.0  /* DNS查询超时时间（秒） */
 
 /* DNS协议相关定义 */
 #define DNS_HEADER_SIZE 12
@@ -136,6 +137,7 @@ typedef struct ctx {
     int          conn_count;
     bool         response_sent;
     int          active_conns;
+    ev_timer     timeout_watcher;  /* 超时定时器 */
     struct ctx  *pool_next;
 } ctx_t;
 
@@ -150,6 +152,10 @@ static int ctx_pool_initialized = 0;
 static tcp_conn_t conn_pool[CONN_POOL_SIZE];
 static tcp_conn_t *conn_free_list = NULL;
 static int conn_pool_initialized = 0;
+
+/* 前置声明 */
+static void free_ctx(ctx_t *ctx, evloop_t *evloop);
+static void ctx_timeout_cb(evloop_t *evloop, ev_timer *watcher, int events);
 
 /* 初始化上下文内存池 */
 static void init_ctx_pool(void) {
@@ -891,6 +897,9 @@ static void free_tcp_conn(tcp_conn_t *conn, evloop_t *evloop) {
 
 /* 释放上下文及关联连接 */
 static void free_ctx(ctx_t *ctx, evloop_t *evloop) {
+    /* 停止超时定时器 */
+    ev_timer_stop(evloop, &ctx->timeout_watcher);
+    
     for (int i = 0; i < ctx->conn_count; i++) {
         if (ctx->connections[i]) {
             free_tcp_conn(ctx->connections[i], evloop);
@@ -925,6 +934,19 @@ static void send_response_and_cleanup(ctx_t *ctx, evloop_t *evloop,
     free_ctx(ctx, evloop);
 }
 
+/* DNS查询超时处理回调 */
+static void ctx_timeout_cb(evloop_t *evloop, ev_timer *watcher, int events __unused) {
+    ctx_t *ctx = container_of(watcher, ctx_t, timeout_watcher);
+    
+    log_warning("DNS query timeout after %.1f seconds", DNS_QUERY_TIMEOUT);
+    
+    /* 标记响应已发送，防止后续响应 */
+    ctx->response_sent = true;
+    
+    /* 清理所有资源 */
+    free_ctx(ctx, evloop);
+}
+
 /* UDP数据接收事件回调 */
 static void udp_recvmsg_cb(evloop_t *evloop, evio_t *watcher __unused, int events __unused) {
     ctx_t *ctx = alloc_ctx();
@@ -952,6 +974,10 @@ static void udp_recvmsg_cb(evloop_t *evloop, evio_t *watcher __unused, int event
     uint16_t *p_msglen = (void *)ctx->query_buffer;
     *p_msglen = htons(nrecv);
     ctx->query_len = nrecv;
+
+    /* 初始化并启动超时定时器 */
+    ev_timer_init(&ctx->timeout_watcher, ctx_timeout_cb, DNS_QUERY_TIMEOUT, 0);
+    ev_timer_start(evloop, &ctx->timeout_watcher);
 
     /* 提取查询域名并匹配分流规则 */
     char domain[DNS_MAX_NAME_LEN] = {0};
