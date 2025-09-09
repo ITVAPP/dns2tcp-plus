@@ -886,11 +886,12 @@ int main(int argc, char *argv[]) {
     return ev_run(evloop, 0);
 }
 
-/* 释放TCP连接资源 */
+/* 释放TCP连接资源 - 修复：断开与ctx的关联 */
 static void free_tcp_conn(tcp_conn_t *conn, evloop_t *evloop) {
     if (conn) {
         ev_io_stop(evloop, &conn->watcher);
         close(conn->watcher.fd);
+        conn->parent_ctx = NULL;  /* 关键修复：断开与ctx的关联 */
         free_conn_to_pool(conn);
     }
 }
@@ -900,12 +901,23 @@ static void free_ctx(ctx_t *ctx, evloop_t *evloop) {
     /* 停止超时定时器 */
     ev_timer_stop(evloop, &ctx->timeout_watcher);
     
+    /* 修复：先断开所有连接与ctx的关联，再释放连接 */
     for (int i = 0; i < ctx->conn_count; i++) {
         if (ctx->connections[i]) {
-            free_tcp_conn(ctx->connections[i], evloop);
+            ctx->connections[i]->parent_ctx = NULL;  /* 关键修复：先断开关联 */
+        }
+    }
+    
+    /* 现在可以安全释放连接了 */
+    for (int i = 0; i < ctx->conn_count; i++) {
+        if (ctx->connections[i]) {
+            ev_io_stop(evloop, &ctx->connections[i]->watcher);
+            close(ctx->connections[i]->watcher.fd);
+            free_conn_to_pool(ctx->connections[i]);
             ctx->connections[i] = NULL;
         }
     }
+    
     free_ctx_to_pool(ctx);
 }
 
@@ -1092,10 +1104,19 @@ free_ctx:
     free_ctx(ctx, evloop);
 }
 
-/* TCP连接建立事件回调 */
+/* TCP连接建立事件回调 - 修复：添加NULL检查 */
 static void tcp_connect_cb(evloop_t *evloop, evio_t *watcher, int events __unused) {
     tcp_conn_t *conn = container_of(watcher, tcp_conn_t, watcher);
     ctx_t *ctx = conn->parent_ctx;
+    
+    /* 关键修复：检查ctx是否已被释放 */
+    if (!ctx) {
+        ev_io_stop(evloop, watcher);
+        close(watcher->fd);
+        free_conn_to_pool(conn);
+        return;
+    }
+    
     server_info_t *server = &g_servers[conn->server_idx];
 
     if (getsockopt(watcher->fd, SOL_SOCKET, SO_ERROR, &errno, &(socklen_t){sizeof(errno)}) < 0 || errno) {
@@ -1109,7 +1130,10 @@ static void tcp_connect_cb(evloop_t *evloop, evio_t *watcher, int events __unuse
             }
         }
         
-        free_tcp_conn(conn, evloop);
+        conn->parent_ctx = NULL;  /* 断开关联 */
+        ev_io_stop(evloop, watcher);
+        close(watcher->fd);
+        free_conn_to_pool(conn);
         
         if (ctx->active_conns == 0 && !ctx->response_sent) {
             free_ctx(ctx, evloop);
@@ -1124,10 +1148,19 @@ static void tcp_connect_cb(evloop_t *evloop, evio_t *watcher, int events __unuse
     ev_invoke(evloop, watcher, EV_WRITE);
 }
 
-/* TCP数据发送事件回调 */
+/* TCP数据发送事件回调 - 修复：添加NULL检查 */
 static void tcp_sendmsg_cb(evloop_t *evloop, evio_t *watcher, int events __unused) {
     tcp_conn_t *conn = container_of(watcher, tcp_conn_t, watcher);
     ctx_t *ctx = conn->parent_ctx;
+    
+    /* 关键修复：检查ctx是否已被释放 */
+    if (!ctx) {
+        ev_io_stop(evloop, watcher);
+        close(watcher->fd);
+        free_conn_to_pool(conn);
+        return;
+    }
+    
     server_info_t *server = &g_servers[conn->server_idx];
     
     if (ctx->response_sent) {
@@ -1138,7 +1171,10 @@ static void tcp_sendmsg_cb(evloop_t *evloop, evio_t *watcher, int events __unuse
                 break;
             }
         }
-        free_tcp_conn(conn, evloop);
+        conn->parent_ctx = NULL;  /* 断开关联 */
+        ev_io_stop(evloop, watcher);
+        close(watcher->fd);
+        free_conn_to_pool(conn);
         return;
     }
 
@@ -1157,7 +1193,10 @@ static void tcp_sendmsg_cb(evloop_t *evloop, evio_t *watcher, int events __unuse
                 break;
             }
         }
-        free_tcp_conn(conn, evloop);
+        conn->parent_ctx = NULL;  /* 断开关联 */
+        ev_io_stop(evloop, watcher);
+        close(watcher->fd);
+        free_conn_to_pool(conn);
         
         if (ctx->active_conns == 0 && !ctx->response_sent) {
             free_ctx(ctx, evloop);
@@ -1176,10 +1215,19 @@ static void tcp_sendmsg_cb(evloop_t *evloop, evio_t *watcher, int events __unuse
     }
 }
 
-/* TCP数据接收事件回调 */
+/* TCP数据接收事件回调 - 修复：添加NULL检查 */
 static void tcp_recvmsg_cb(evloop_t *evloop, evio_t *watcher, int events __unused) {
     tcp_conn_t *conn = container_of(watcher, tcp_conn_t, watcher);
     ctx_t *ctx = conn->parent_ctx;
+    
+    /* 关键修复：检查ctx是否已被释放 */
+    if (!ctx) {
+        ev_io_stop(evloop, watcher);
+        close(watcher->fd);
+        free_conn_to_pool(conn);
+        return;
+    }
+    
     server_info_t *server = &g_servers[conn->server_idx];
     
     if (ctx->response_sent) {
@@ -1190,7 +1238,10 @@ static void tcp_recvmsg_cb(evloop_t *evloop, evio_t *watcher, int events __unuse
                 break;
             }
         }
-        free_tcp_conn(conn, evloop);
+        conn->parent_ctx = NULL;  /* 断开关联 */
+        ev_io_stop(evloop, watcher);
+        close(watcher->fd);
+        free_conn_to_pool(conn);
         return;
     }
 
@@ -1237,7 +1288,10 @@ cleanup_conn:
             break;
         }
     }
-    free_tcp_conn(conn, evloop);
+    conn->parent_ctx = NULL;  /* 断开关联 */
+    ev_io_stop(evloop, watcher);
+    close(watcher->fd);
+    free_conn_to_pool(conn);
     
     if (ctx->active_conns == 0 && !ctx->response_sent) {
         free_ctx(ctx, evloop);
