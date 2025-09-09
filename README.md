@@ -244,7 +244,7 @@ Based on v1.3.1 testing:
 
 ## 🔄 Changelog
 
-### v1.3.1 (2024-12-24)
+### v1.3.1
 - 🔒 **Critical Fix**: Resolved Use-After-Free vulnerability in high concurrency scenarios
 - ⚡ Improved connection lifecycle management for better stability
 - 🛠️ Enhanced resource cleanup mechanism
